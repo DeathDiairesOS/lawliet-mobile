@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ancalor-mobile"
+version = "0.1.0"
+description = "Lightweight, local mobile evidence triage and forensic CLI"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.scripts]
+ancalor-mobile = "ancalor_mobile.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["ancalor_mobile*"]
