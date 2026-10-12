@@ -1,6 +1,7 @@
 import hashlib
 import json
 import plistlib
+import re
 import subprocess
 import sys
 import tempfile
@@ -9,6 +10,9 @@ from pathlib import Path
 from unittest.mock import patch
 from lawliet_mobile import evidence_viewer as viewer
 from lawliet_mobile.core import UserError, connect, create_case, import_evidence
+
+
+SUPPORTED_EXPAT = tuple(int(x) for x in re.findall(r'\d+', viewer.expat.EXPAT_VERSION)[:3]) >= (2, 7, 2)
 
 
 class EvidenceViewerTests(unittest.TestCase):
@@ -73,21 +77,31 @@ class EvidenceViewerTests(unittest.TestCase):
             with patch.object(viewer.expat, 'EXPAT_VERSION', 'expat_2.6.0'), self.assertRaises(ValueError):
                 viewer._xml(b'<r/>')
             fid = self.imported(root, db, b'<r b="2" a="1">text<!--c--><x/></r>')
-            tree = viewer.inspect_file(root, db, fid, format_name='xml')['structured']['tree']
-            self.assertEqual(tree['attributes'], [['b', '2'], ['a', '1']])
-            self.assertEqual(tree['children'][0], {'kind': 'text', 'value': 'text'})
+            result = viewer.inspect_file(root, db, fid, format_name='xml')['structured']
+            if SUPPORTED_EXPAT:
+                tree = result['tree']
+                self.assertEqual(tree['attributes'], [['b', '2'], ['a', '1']])
+                self.assertEqual(tree['children'][0], {'kind': 'text', 'value': 'text'})
+            else:
+                self.assertEqual(result['state'], 'unsupported-or-invalid')
+                self.assertIn('Expat >= 2.7.2', result['error'])
 
     def test_binary_xml_plist_typed_bytes_and_duplicate_dictionary_refusal(self):
         with connect(self.workspace, 'one') as (root, db):
             for fmt in [plistlib.FMT_XML, plistlib.FMT_BINARY]:
                 fid = self.imported(root, db, plistlib.dumps({'blob': b'\x00\xff', 'number': 42}, fmt=fmt))
                 result = viewer.inspect_file(root, db, fid, format_name='plist')['structured']
+                if fmt == plistlib.FMT_XML and not SUPPORTED_EXPAT:
+                    self.assertEqual(result['state'], 'unsupported-or-invalid')
+                    self.assertIn('Expat >= 2.7.2', result['error'])
+                    continue
                 self.assertEqual(result['state'], 'parsed', result)
                 self.assertEqual(dict(result['tree']['pairs'])['blob']['base64'], 'AP8=')
             duplicate = b'<plist version="1.0"><dict><key>x</key><string>one</string><key>x</key><string>two</string></dict></plist>'
             fid = self.imported(root, db, duplicate)
             result = viewer.inspect_file(root, db, fid, format_name='plist')['structured']
-            self.assertEqual(result['state'], 'unsupported-or-invalid'); self.assertIn('Duplicate', result['error'])
+            self.assertEqual(result['state'], 'unsupported-or-invalid')
+            self.assertIn('Duplicate' if SUPPORTED_EXPAT else 'Expat >= 2.7.2', result['error'])
 
     def test_limits_invalid_input_and_worker_timeout_keep_raw_window(self):
         with connect(self.workspace, 'one') as (root, db):

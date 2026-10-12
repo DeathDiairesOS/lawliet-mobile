@@ -159,7 +159,7 @@ the backend CLI has separate platform coverage.
    report review/redaction and exports. Confirm that unsupported inputs and
    incomplete runs retain explicit limitations instead of producing success.
 
-The patched Mulder integration requires the upstream source at revision
+For manual setup instead of the installer, the patched Mulder integration uses revision
 `5321847887fe1fcb5399cec0a1703db9c513bac8` and the patch at
 `integrations/mulder/lawliet.patch`. In a separate upstream checkout, run
 `git checkout --detach 5321847887fe1fcb5399cec0a1703db9c513bac8`, then
@@ -184,7 +184,7 @@ versions, device/OS versions, test results and unresolved limitations.
 ## Try it in a minute
 
 ```bash
-git clone https://github.com/enleak/lawliet-mobile.git
+git clone https://github.com/DeathDiairesOS/lawliet-mobile.git
 cd lawliet-mobile
 python3 -m lawliet_mobile demo
 python3 -m lawliet_mobile timeline --case demo
@@ -302,8 +302,9 @@ External tools receive disposable copies of imported evidence. Their output,
 error logs, command arguments, entry-point hash, exit status, and elapsed time are
 retained under `runs/`. Dependency trees are not yet fingerprinted. `doctor`
 checks tool presence, not compatibility or forensic correctness. ExifTool's
-adapter has been exercised against the installed tool; LEAPP adapters have
-protocol-fixture tests but await real LEAPP integration validation.
+adapter has been exercised against the installed tool. Setup also runs real LEAPP
+parsers against synthetic known records and checks retained imports/provenance.
+Representative customer extraction validation remains separate.
 
 ## Connecting a phone
 
@@ -362,10 +363,11 @@ Tests cover native iOS/Android fixtures, hashed backups, WAL-only records,
 idempotence, provenance, timestamp behavior, integrity/tampering, unsafe archives,
 report escaping, export behavior, tool failures/timeouts, and optional ExifTool.
 
-Next priorities: real device acquisition validation; real LEAPP integration tests;
+Next priorities: real device acquisition validation; representative LEAPP extraction acceptance;
 versioned schema fixtures from supported mobile OS/app versions; structured SAF /
 UnifiedLogs and SQLite Dissect adapters; endpoint/mobile case correlation.
-MVT/AndroidQF remain research candidates, not implemented dependencies: their
+The mobile installer provisions the MVT CLI for the tool environment; this does not
+add a desktop MVT verdict workflow. AndroidQF remains a research candidate. MVT's
 [license](https://license.mvt.re/1.1/) requires explicit data-owner consent.
 
 No upstream tool is bundled. Before shipping optional binaries, review the exact
