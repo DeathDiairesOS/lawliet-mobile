@@ -1,2 +1,4 @@
 # Unified patches preserve upstream context and removed whitespace literally.
-*.patch -whitespace
+*.patch text eol=lf -whitespace
+# Setup checks these files by byte digest, including on Windows checkouts.
+setup/locks/*.txt text eol=lf

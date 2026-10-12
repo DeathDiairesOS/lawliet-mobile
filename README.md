@@ -3,8 +3,10 @@
 **Local mobile evidence triage. One CLI. Android and iOS.**
 
 Python standard library only. No daemon, database server, container, cloud service,
-or required third-party runtime package. Runs with Python 3.11+ on macOS, Linux,
-and Windows. Optional CLI tools extend collection and parsing.
+or required third-party runtime package. The backend uses Python 3.11+; current
+release checks qualify macOS and Linux. Windows paths remain experimental, with
+known timezone, file-handling and POSIX runner limitations. Windows CI is advisory;
+it is not a supported desktop/setup target. Optional CLI tools extend collection and parsing.
 
 This is an initial working release with a limited native support matrix. Physical
 device collection is implemented but has not yet been validated on real devices.
