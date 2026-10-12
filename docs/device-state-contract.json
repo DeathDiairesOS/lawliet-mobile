@@ -1,0 +1,73 @@
+{
+  "requirement": "MOB-003",
+  "status": "backend_CLI_and_stdio_validation_passed_UI_pending",
+  "command": "ancalor --workspace CASES device-state --case CASE --record-json WORKSHEET.json",
+  "list_command": "ancalor --workspace CASES device-state --case CASE --after 0 --limit 100",
+  "maximum_input_bytes": 32768,
+  "example": {
+    "device_reference": "operator supplied device ID",
+    "examiner": "operator supplied name",
+    "observed_at": "2026-10-11T19:00:00-04:00",
+    "states": {
+      "lock": {
+        "value": "locked",
+        "basis": "observation",
+        "reference": "operator supplied photograph or note locator"
+      }
+    }
+  },
+  "fields": {
+    "power": [
+      "on",
+      "off",
+      "unknown"
+    ],
+    "lock": [
+      "locked",
+      "unlocked",
+      "unknown"
+    ],
+    "network": [
+      "connected",
+      "disconnected",
+      "airplane-mode",
+      "unknown"
+    ],
+    "restart": [
+      "observed",
+      "not-observed",
+      "unknown"
+    ],
+    "boot_state": [
+      "BFU",
+      "AFU",
+      "unknown"
+    ]
+  },
+  "basis": [
+    "observation",
+    "inference",
+    "unknown"
+  ],
+  "requirements": [
+    "Known state requires nonempty supporting reference and an explicit basis",
+    "Absent state stays unknown",
+    "BFU/AFU never inferred automatically from lock/power/restart",
+    "References/identity are operator claims, not independently authenticated",
+    "Append-only audit observations preserve conflicts; no device calls performed",
+    "evidence_id optional and must belong to current case",
+    "Observed timestamp must include offset; entered value preserved"
+  ],
+  "app_backend_action": {
+    "device-state-record": {
+      "case": "case ID",
+      "worksheet": "same object as CLI record JSON"
+    },
+    "device-state-list": {
+      "case": "case ID",
+      "after": "nonnegative integer audit cursor; default 0",
+      "limit": "integer 1\u2013100; default 100"
+    }
+  },
+  "validation": "Five focused regressions pass, including real JSON-over-stdio record/reopen/case isolation and invalid-input rejection. No physical acquisition acceptance."
+}

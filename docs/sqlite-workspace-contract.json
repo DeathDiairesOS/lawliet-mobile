@@ -1,0 +1,98 @@
+{
+  "requirement": "MOB-061",
+  "module": "ancalor_mobile.sqlite_workspace",
+  "status": "partial_backend_implemented",
+  "formal_acceptance": false,
+  "calls": {
+    "query": "query(root, db, file_id, sql, parameters=(), row_limit=1000, max_output_bytes=8388608, timeout_seconds=5)",
+    "schema": "schema(root, db, file_id, **limits)",
+    "page": "read_result(root, db, run_id, offset=0, limit=100)"
+  },
+  "limits": {
+    "input_bytes": 536870912,
+    "row_limit": [
+      1,
+      100000
+    ],
+    "output_bytes": [
+      1024,
+      16777216
+    ],
+    "timeout_seconds": [
+      0.05,
+      30
+    ],
+    "page_size": [
+      1,
+      1000
+    ],
+    "preview_rows": 100,
+    "sqlite_heap_bytes": 67108864,
+    "sqlite_field_bytes": 1048576,
+    "sql_bytes": 32768,
+    "compiled_vm_operations": 1000000
+  },
+  "input_scope": "Current case retained file ID. Main and physically or logically associated companions require intake hash/size match. No arbitrary filesystem database access. All source and output ancestor symlinks refused.",
+  "execution": "Separate isolated Python child opens only disposable working copies. Supplied SHM hashed and retained untouched; working SHM rebuilt. SQLite readonly URI, query_only, trusted_schema off, SELECT/READ/function allowlist authorizer, SQLite limits, progress deadline and child timeout. This is not a general OS sandbox.",
+  "result": "Ordered columns plus JSONL row arrays; duplicate column names, Unicode, int, float and NULL preserved. BLOB encoded as sqlite_blob_hex; nonfinite float explicitly tagged. Raw result only: no automatic artifact/finding/meaning promotion.",
+  "states": [
+    "parsed",
+    "empty",
+    "limited",
+    "denied",
+    "timed-out",
+    "corrupt",
+    "unsupported-or-corrupt",
+    "unsupported-schema",
+    "resource-limited",
+    "query-failed",
+    "worker-failed",
+    "failed"
+  ],
+  "state_rules": [
+    "Empty means this query returned zero rows, never no evidence.",
+    "Any supplied WAL remains pairing-unverified. Missing expected WAL produces limited checkpoint-only warning. Structurally valid foreign WAL can produce readable rows; no cryptographic association claim.",
+    "Caps set truncated and limit_reason. Failed partial rows retained as diagnostics but not exposed by result pager.",
+    "Validation/integrity preconditions raise UserError; admitted query failures have retained run/request/receipt/audit."
+  ],
+  "receipts": "query.json, result.jsonl if produced, worker-result.json, worker.stderr, receipt.json in runs/run_id. Start and finish hash-bound audit entries; pagination validates chain and query/receipt/result hashes plus exact run detail. Local hash chain is tamper detection, not authenticated external attestation.",
+  "ui_contract": [
+    "Present exact SQL and bound parameters, source logical path/hash and supplied companion hashes.",
+    "Show state/warnings/truncation and row cap beside every result.",
+    "Render arrays against ordered columns, never zip into dictionaries that collapse duplicate names.",
+    "Show BLOB hex as bytes, not inferred text.",
+    "Do not equate successful query with examiner verification or recovered deleted messages.",
+    "Query values/results may contain sensitive evidence. No redaction support or safe external share claim."
+  ],
+  "not_done": [
+    "UI presentation",
+    "independent examiner validation on acquired schema queries",
+    "general unrestricted SQL",
+    "cryptographic WAL pairing authentication"
+  ],
+  "primary_references": [
+    "https://docs.python.org/3/library/sqlite3.html",
+    "https://www.sqlite.org/c3ref/set_authorizer.html",
+    "https://www.sqlite.org/limits.html"
+  ],
+  "backend_actions": {
+    "sqlite-query": {
+      "file_id": "positive current-case retained file ID",
+      "sql": "single read-only result query",
+      "parameters": "ordered JSON scalar array; default []",
+      "row_limit": 1000,
+      "max_output_bytes": 8388608,
+      "timeout_seconds": 5
+    },
+    "sqlite-schema": {
+      "file_id": "positive retained file ID",
+      "limits": "same optional bounds"
+    },
+    "sqlite-query-result": {
+      "run_id": "completed case-local query run",
+      "offset": 0,
+      "limit": 100
+    }
+  },
+  "bridge_validation": "Actual stdio query/schema/paged-result, denied write, case isolation, invalid limits; combined30focused tests pass with candidate source PYTHONPATH."
+}

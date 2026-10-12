@@ -1,0 +1,188 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'none'; img-src 'none'; frame-src 'none'; base-uri 'none'; form-action 'none'">
+<title>Lawliet Coverage</title><style>:root {color-scheme:dark;--background:#0B070F;--foreground:#EDE8F2;--muted-foreground:#9B8CA9;--card:#171020;--card-foreground:#EDE8F2;--border:#39264D;--primary:#963FE0;--primary-foreground:#FFFFFF;--viz-series-1:#963FE0;--font-size-base:14px}
+
+:root[data-theme="light"] {color-scheme:light;--background:#EDE8F2;--foreground:#0B070F;--muted-foreground:#675772;--card:#F7F3FA;--card-foreground:#0B070F;--border:#D4C4E0;--primary:#8230C7;--primary-foreground:#FFFFFF;--viz-series-1:#8230C7}
+* {box-sizing:border-box}
+html,body {margin:0;background:var(--background);color:var(--foreground);font:14px -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;line-height:1.5}
+body {padding:22px}
+#lawliet-capability-map {max-width:1100px;margin:0 auto}
+h2 {font-size:20px;font-weight:500;margin:0 0 18px}
+h3 {font-size:16px;font-weight:500;margin:18px 0 0}
+.text-small {font-size:12px}
+.btn {font:inherit;color:var(--foreground);background:var(--card);border:1px solid var(--border);border-radius:6px;padding:9px 12px;cursor:pointer;white-space:normal}
+.btn:hover {border-color:var(--primary)}
+.btn:focus-visible,summary:focus-visible {outline:2px solid var(--primary);outline-offset:3px}
+.btn[aria-pressed="true"] {background:var(--primary);color:var(--primary-foreground)}
+.btn-block {display:block;width:100%}
+.btn-ghost {background:transparent}
+.viz-row {display:flex;flex-wrap:wrap;gap:8px;align-items:center}
+hr {border:0;border-top:1px solid var(--border);margin:20px 0}
+summary {cursor:pointer}
+</style></head><body><div id="lawliet-capability-map">
+  <style>
+    #lawliet-capability-map .mindmap {position:relative;display:grid;grid-template-columns:minmax(0,1fr) 150px minmax(0,1fr);gap:30px;align-items:center;margin:24px 0 28px}
+    #lawliet-capability-map .branch-side {display:flex;flex-direction:column;gap:20px;z-index:1;min-width:0}
+    #lawliet-capability-map .map-root {text-align:center;z-index:1;font-weight:500;color:var(--foreground)}
+    #lawliet-capability-map .root-sub {display:block;font-weight:400;margin-top:6px;color:var(--muted-foreground)}
+    #lawliet-capability-map .links {position:absolute;inset:0;pointer-events:none;overflow:visible}
+    #lawliet-capability-map .links path {fill:none;stroke:var(--border);stroke-width:1.5}
+    #lawliet-capability-map .links path.selected {stroke:var(--viz-series-1)}
+    #lawliet-capability-map .children {margin-top:14px;padding-left:20px;border-left:1px solid var(--border)}
+    #lawliet-capability-map details {padding:10px 0}
+    #lawliet-capability-map summary {color:var(--foreground);font-weight:500}
+    #lawliet-capability-map .detail-body {padding:12px 0 4px 20px;color:var(--foreground)}
+    #lawliet-capability-map .detail-body dl {margin:0;display:grid;grid-template-columns:100px minmax(0,1fr);gap:8px 14px}
+    #lawliet-capability-map dt {color:var(--muted-foreground);font-weight:400}
+    #lawliet-capability-map dd {margin:0;overflow-wrap:anywhere}
+    #lawliet-capability-map .tag {font-weight:400;margin-left:8px;white-space:nowrap;color:var(--muted-foreground)}
+    #lawliet-capability-map .route {margin-top:14px;color:var(--muted-foreground)}
+    #lawliet-capability-map .crosslinks {margin-top:12px}
+    #lawliet-capability-map .legend {display:flex;gap:8px 18px;flex-wrap:wrap;color:var(--muted-foreground);margin:10px 0}
+    @media(max-width:540px) {
+      #lawliet-capability-map .mindmap {grid-template-columns:1fr;gap:12px}
+      #lawliet-capability-map .map-root {grid-row:1;text-align:left}
+      #lawliet-capability-map .branch-side {gap:8px}
+      #lawliet-capability-map .links {display:none}
+      #lawliet-capability-map .detail-body {padding-left:4px}
+      #lawliet-capability-map .detail-body dl {grid-template-columns:1fr;gap:4px}
+      #lawliet-capability-map dd {margin-bottom:8px}
+      #lawliet-capability-map .tag {display:block;margin:4px 0 0}
+    }
+  </style>
+  <h2>Lawliet customer capability map</h2>
+  <div class="mindmap" aria-label="Six branches of the mobile forensic pipeline">
+    <svg class="links" aria-hidden="true"></svg>
+    <div class="branch-side">
+      <button type="button" class="btn btn-block" data-branch="cases" aria-pressed="false" aria-controls="lawliet-map-detail">Customer questions</button>
+      <button type="button" class="btn btn-block" data-branch="intake" aria-pressed="false" aria-controls="lawliet-map-detail">Evidence intake</button>
+      <button type="button" class="btn btn-block" data-branch="artifacts" aria-pressed="true" aria-controls="lawliet-map-detail">Artifacts checked</button>
+    </div>
+    <div class="map-root">Lawliet pipeline<span class="root-sub text-small">Question → evidence → findings</span></div>
+    <div class="branch-side">
+      <button type="button" class="btn btn-block" data-branch="analysis" aria-pressed="false" aria-controls="lawliet-map-detail">Analysis & review</button>
+      <button type="button" class="btn btn-block" data-branch="outputs" aria-pressed="false" aria-controls="lawliet-map-detail">Customer outputs</button>
+      <button type="button" class="btn btn-block" data-branch="limits" aria-pressed="false" aria-controls="lawliet-map-detail">Limits & eligibility</button>
+    </div>
+  </div>
+  <div class="legend text-small" aria-label="Capability status legend">
+    <span data-tooltip="Checked against documented lab fixtures; only the tested source and schema are covered.">Fixture-checked</span>
+    <span data-tooltip="Present in source and software checks; this is not approval for every real-world device or case.">Implemented</span>
+    <span data-tooltip="Requires a readable compatible source, optional tool or existing authorized access.">Source-dependent</span>
+    <span data-tooltip="Partial or provisional capability; additional validation is needed.">Limited</span>
+    <span data-tooltip="Excluded from the current supported offer.">Not offered</span>
+  </div>
+  <hr>
+  <section id="lawliet-map-detail" aria-live="polite" aria-label="Selected capability branch"></section>
+  <div class="route text-small">Execution: Codex → Mulder MCP → forensic tools/native parsers → retained Lawliet records → examiner review → scoped outputs</div>
+  <script>
+    (() => {
+      const root = document.getElementById('lawliet-capability-map');
+      const model = {
+        cases: {title:'Customer questions → possible investigation scopes', rows:[
+          {id:'communication',name:'Communication chronology',status:'Source-dependent',question:'What was exchanged, with which recorded addresses, and when?',artifacts:'SMS/iMessage, supported MMS fields, WhatsApp exports, compatible Signal records, calls and contacts.',output:'A source-cited communication timeline and selected findings.',limit:'Only the supplied readable history; sender labels do not establish the person behind an account.',related:['messages','contacts','calls']},
+          {id:'scam',name:'Scam or suspicious-link review',status:'Source-dependent',question:'Where does a reported link, number or account occur in the supplied records?',artifacts:'Messages, Chrome/Safari visits, app inventory and acquired files.',output:'Matching records, chronology and documented observations for examiner review.',limit:'Supports factual investigation; does not prove fraud, attribution or that a phone is malware-free.',related:['messages','browser','apps']},
+          {id:'incident',name:'Workplace or device-incident review',status:'Source-dependent',question:'What activity is recorded around an agreed event or date range?',artifacts:'Communications, browser activity, media metadata and compatible app/system reports.',output:'A bounded activity timeline with cited evidence and coverage gaps.',limit:'No automatic finding of misconduct; app and OS support must match the supplied data.',related:['browser','apps','media']},
+          {id:'media-case',name:'Photo, file and attachment review',status:'Source-dependent',question:'Which files were acquired, what metadata is available, and which records reference them?',artifacts:'Photos/videos, file hashes, media metadata and exact retained attachment references.',output:'A media/file inventory and selected exhibits with source references.',limit:'Missing payloads stay missing; timestamps and trash markers require source-specific interpretation.',related:['media','mms']},
+          {id:'evidence-review',name:'Review an existing extraction or parser report',status:'Implemented',question:'Can we organize and trace the supplied evidence back to its retained source?',artifacts:'Readable Android/iOS extractions; ALEAPP/iLEAPP tables; supported JSONL/TSV imports.',output:'Searchable records, findings, scoped reports and a coverage record.',limit:'Report-only results are traced to the report; they are not independently verified phone-database evidence.',related:['imports']},
+          {id:'recovery-case',name:'SQLite recovery assessment',status:'Limited',question:'Does supplied database material contain potentially recoverable fragments or history?',artifacts:'Plaintext SQLite and captured WAL/journal sidecars through compatible recovery tools.',output:'Recovery candidates and an examiner assessment of their provenance and meaning.',limit:'Candidate recovery is not a guarantee of deleted or expired message recovery.',related:['recovery']}
+        ]},
+        intake: {title:'Evidence intake → inputs and access routes', rows:[
+          {id:'raw-input',name:'Pre-acquired Android/iOS evidence',status:'Fixture-checked',input:'Readable extraction folders, supported backups, SQLite databases and retained files.',check:'Hash and inventory imported bytes; preserve source paths and analysis scope.',limit:'Exact schema and input format determine support; an imported folder is not proof of full-phone coverage.',basis:'core.py, parsers.py; documented Android/iOS fixture matrix'},
+          {id:'reports-input',name:'Existing ALEAPP/iLEAPP and structured reports',status:'Source-dependent',input:'Complete compatible output folders, supported TSV/JSONL records and retained report files.',check:'Normalize known fields, preserve unknown fields and retain report-line provenance.',limit:'Report hash and raw database hash are separate evidence tiers.',basis:'parsed_import.py, leapp_reports.py; report-only support rows'},
+          {id:'exports-input',name:'Owner-provided app exports',status:'Source-dependent',input:'WhatsApp text, SMS Backup & Restore XML, vCard contacts and supported legacy Signal backups.',check:'Preserve originals; apply format-specific date, timezone and known-passphrase handling.',limit:'Export completeness and authenticity are not guaranteed. Current encrypted app containers are not universally supported.',basis:'workflows.py, xml_backup.py, contacts.py, signal_backup.py'},
+          {id:'decrypt-input',name:'Known-password backup preparation',status:'Fixture-checked',input:'A compatible encrypted iTunes backup and its supplied known password.',check:'A separate validated tool route produces a decrypted working source for review.',limit:'The documented check covers an iOS 13 lab source; no password recovery, brute force or locked-device access.',basis:'DFIR-23 candidate matrix; separate MVT decryption route'},
+          {id:'live-input',name:'Connected Android or iOS collection',status:'Limited',input:'Android USB/ADB authorization; iOS trust pairing and supported logical backup access.',check:'Android access assessment, selected shared-file pulls/logs and source-dependent collection profiles; iOS logical backup.',limit:'Implemented collection requires device/OS validation. It does not guarantee private-app or full-filesystem acquisition.',basis:'tools.py, acquisition.py, phone_assessment.py'},
+          {id:'live-view',name:'Android viewing and control',status:'Implemented',input:'A normally authorized USB Android device, ADB and compatible scrcpy on macOS.',check:'Explicit viewing, optional control, navigation, session lifecycle and UTC command/session audit.',limit:'Live interaction changes state. Individual scrcpy inputs are not individually audited; physical video/input validation remains pending.',basis:'device_interaction.py, DeviceInteractionView.swift; mocked lifecycle checks'}
+        ]},
+        artifacts: {title:'Artifacts checked → source, fields and boundaries', rows:[
+          {id:'messages',name:'Messages and conversations',status:'Fixture-checked',source:'Android telephony SMS and iOS SMS/iMessage databases; supported exports or compatible app records.',fields:'Message text when plaintext is present, recorded address/sender label, direction, conversation and source timestamp.',customer:'Communication chronology; matching keywords, phone numbers and dates.',limit:'Raw-backed lab checks cover Android 13 and iOS 13 subsets. WhatsApp/Signal support is source-dependent; opaque rich-message blobs and current encrypted containers are not blanket-supported.',basis:'parsers.py, messages.py, workflows.py; DFIR-23 fixtures'},
+          {id:'mms',name:'MMS parts and address records',status:'Limited',source:'Supported Android mmssms.db pdu/part/addr tables; compatible XML exports.',fields:'Raw message/control rows, address and part records, inline text where supported and exact retained payload references.',customer:'Inspect what MMS evidence is actually present and identify missing payloads.',limit:'Raw-field controls passed for supplied fixtures; no RCS support or guaranteed attachment/body/participant interpretation.',basis:'android_mms.py; native 0.1.5 supplement and MVS raw checks'},
+          {id:'browser',name:'Browser activity',status:'Fixture-checked',source:'Supported Chrome History and Safari History.db schemas; compatible upstream reports.',fields:'URLs, titles and available visit timestamps; source tables distinguish visits from URL summaries.',customer:'Check reported links and reconstruct the recorded browsing chronology.',limit:'Checked Android 13/iOS 13 and selected MVS sources; no complete incognito, session or download-history guarantee.',basis:'parsers.py; Chrome/Safari fixture rows; task-progress milestones'},
+          {id:'contacts',name:'Contacts and recorded identifiers',status:'Source-dependent',source:'Supported Android/iOS contact schemas, vCard exports and compatible contact reports.',fields:'Available names, organizations, phone numbers and source-specific contact fields.',customer:'Context for recorded communication endpoints and examiner-authored identity associations.',limit:'Native iOS fixture check is narrow; names and numbers do not authenticate a person or prove device ownership.',basis:'contacts.py, identity_associations.py; iOS ABPerson fixture'},
+          {id:'calls',name:'Call records',status:'Implemented',source:'Supported Android calls/iOS ZCALLRECORD tables and compatible XML/parser exports.',fields:'Recorded number/address, direction/type where available, duration and call timestamp.',customer:'Compare call chronology with messages or an agreed incident window.',limit:'Presence of a call record does not establish who spoke, what was said or whether all calls were retained.',basis:'parsers.py, xml_backup.py; native support and software checks'},
+          {id:'media',name:'Photos, videos, files and attachments',status:'Source-dependent',source:'Acquired media/files, compatible ExifTool output and exact retained attachment references.',fields:'Hashes, size/type, previews, available metadata/times, source associations and source-qualified trash markers.',customer:'File inventory and selected image/file exhibits; distinguish acquired bytes from missing references.',limit:'No missing-file reconstruction, universal deleted-photo recovery, authenticity certification or location inference from an unknown timestamp.',basis:'media.py, media_time.py, evidence_viewer.py, file_inventory.py'},
+          {id:'apps',name:'Apps, usage and device records',status:'Source-dependent',source:'Android package/getprop/logcat collection and compatible ALEAPP/iLEAPP app/system tables.',fields:'Package inventory, OS/device properties, supplied usage/activity/permission records and available log events.',customer:'Context for suspicious apps and activity around an agreed event.',limit:'Unknown report fields are retained; their presence does not imply a validated semantic interpretation or malware verdict.',basis:'tools.py, leapp_reports.py, review_groups.py'},
+          {id:'location',name:'Location-related source records',status:'Limited',source:'Compatible upstream location reports, supplied media GPS metadata and a narrow Google Maps preference decoder.',fields:'Only coordinates and time fields that the source and decoder actually provide.',customer:'Corroborating context when the exact source is available and checked.',limit:'Not a complete location history or proof that a person was present; Maps decoder is provisional and version-specific.',basis:'maps_foreground.py, ExifTool adapter; source-dependent upstream records'},
+          {id:'recovery',name:'SQLite history and recovery candidates',status:'Limited',source:'Readable SQLite plus captured matching sidecars; optional sqlite-dissect or sqlite4n6 adapter.',fields:'Candidate fragments/history, tool output, source references and recovery status.',customer:'A recovery assessment of available database material.',limit:'No universal deleted-message, disappearing-message or expired-history recovery. Examiner review is required.',basis:'recovery.py, sqlite4n6.py; adapter contracts'},
+          {id:'imports',name:'Other retained parser-report artifacts',status:'Source-dependent',source:'Compatible ALEAPP/iLEAPP or supported structured report imports.',fields:'Original columns for accounts, calendar, network, notifications and other reported families.',customer:'Search and review retained source fields alongside normalized categories.',limit:'Importing a table does not certify its parser, semantic mapping, full acquisition coverage or raw-source accuracy.',basis:'leapp_reports.py, parsed_import.py, portable_coverage.py'}
+        ]},
+        analysis: {title:'Analysis & review → examiner workflow', rows:[
+          {id:'query',name:'Search, filter and build chronology',status:'Implemented',check:'Keyword/phone search, source/run/app/participant/date scope, sorting, pagination and conversation views.',customer:'Locate relevant records and compare chronology within a defined question.',limit:'Unknown timezone/undated records remain explicit; overlapping sources are not automatically unique evidence.',basis:'phone_search.py, messages.py, report_sort.py, app_backend.py'},
+          {id:'trace',name:'Trace a finding to its source',status:'Implemented',check:'Source hashes, logical paths, original fields, source-row/report-line references and retained file inspection.',customer:'Make the basis of each factual observation reviewable.',limit:'Report-only provenance cites the report; it does not substitute for a raw device database.',basis:'core.py, evidence_viewer.py, findings.py'},
+          {id:'integrity',name:'Check integrity and processing coverage',status:'Implemented',check:'Imported-byte verification, expected-file reconciliation, parser failures and separate collection/parsing/review/verification states.',customer:'Explain what was examined and where the coverage is incomplete.',limit:'No finding in indexed records is not proof that the artifact never existed on the phone.',basis:'validation.py, coverage_ledger.py, portable_coverage.py'},
+          {id:'interpret',name:'Record examiner findings and associations',status:'Implemented',check:'Saved findings, notes, provenance-bound record snapshots and explicit identifier associations.',customer:'Separate observations, interpretations and unresolved questions.',limit:'Identity associations remain examiner claims; model suggestions require review.',basis:'findings.py, identity_associations.py, investigation.py'},
+          {id:'orchestrate',name:'Coordinate forensic tools through Mulder',status:'Source-dependent',check:'Codex-driven MCP execution of compatible tools, retained runs/results and subsequent Lawliet review.',customer:'A repeatable question-led workflow over acquired evidence.',limit:'This route differs from the legacy GUI engine launcher. Tool availability is not a guarantee of validated capability.',basis:'docs/pipeline-work-map.json; adapter contracts'}
+        ]},
+        outputs: {title:'Customer outputs → reviewable deliverables', rows:[
+          {id:'timeline-output',name:'Scoped timelines and record exports',status:'Implemented',output:'Selected records as JSON/JSONL/CSV and readable HTML reports, with scope and source references.',customer:'Review a communication or activity window without exposing unrelated records by default.',limit:'An examiner chooses scope and checks the output. An export does not prove device completeness.',basis:'report.py, report_validation.py, portable_coverage.py'},
+          {id:'findings-output',name:'Findings and selected exhibits',status:'Implemented',output:'Examiner-authored findings, record snapshots, notes and source-bound exhibit references.',customer:'A concise account of what the acquired evidence supports.',limit:'Interpretations and source facts remain distinct; citations do not themselves prove a conclusion.',basis:'findings.py, report_preparation.py'},
+          {id:'draft-output',name:'Investigation report draft and technical annex',status:'Implemented',output:'A draft built from selected findings, with technical provenance and review records.',customer:'A structured report for examiner review before customer release.',limit:'Draft creation or internal approval is not an automatic service release or court-acceptance guarantee.',basis:'investigation_report.py, DraftReviewView.swift'},
+          {id:'coverage-output',name:'Coverage and limitation statement',status:'Implemented',output:'Acquired/parsed/reviewed/verified scope, missing sources, unsupported inputs, failures and unresolved questions.',customer:'Understand both the findings and the examination boundaries.',limit:'Only documented scope is asserted; category counts do not prove a complete phone examination.',basis:'coverage_ledger.py, portable_coverage.py'},
+          {id:'redaction-output',name:'Internal masking preview',status:'Limited',output:'Examiner-selected literal masking in a plaintext preview.',customer:'An internal preparation aid before a separate release/redaction workflow.',limit:'Not a customer-ready sanitized package; attachments, images, exhibits and other files are not comprehensively redacted.',basis:'masking_preview.py'}
+        ]},
+        limits: {title:'Limits & eligibility → qualify the offer', rows:[
+          {id:'fit',name:'Best initial service fit',status:'Source-dependent',scope:'One agreed factual question over an authorized, already-acquired readable mobile dataset.',offer:'Bounded communication/browser review, source-cited findings and explicit coverage.',limit:'The current support matrix is technical fixture evidence. Matching device/app/schema and examiner review determine case eligibility.',basis:'DFIR-23 declared IPER-1 workflow; pipeline-work-map.json'},
+          {id:'access',name:'Locks, passwords and private app access',status:'Not offered',scope:'No lock bypass, password cracking, root installation or unavailable-key recovery.',offer:'Use normal authorization, supplied usable keys and approved compatible acquisition routes.',limit:'An authorized USB connection does not make every private app database accessible.',basis:'phone_assessment.py, workflows.py, device_interaction.py'},
+          {id:'unsupported',name:'Unsupported containers and universal recovery',status:'Not offered',scope:'No validated proprietary UFDR/UFD/UFDX decoder, universal RCS/current Signal support, screenshot-only message reconstruction or guaranteed full-device acquisition.',offer:'Assess whether a supported readable export/extraction is available.',limit:'A generic import or installed optional tool is not equivalent to a supported source route.',basis:'DFIR-23 support matrix; native container scope tests'},
+          {id:'conclusions',name:'Attribution, absence and automated verdicts',status:'Not offered',scope:'No automatic proof of guilt, authorship, identity, complete absence of data or a malware-free phone.',offer:'Report supported observations, examiner interpretations and unresolved questions.',limit:'An empty search result applies only to the selected indexed evidence.',basis:'investigation_report.py, identity_associations.py, coverage contracts'},
+          {id:'release',name:'Customer release and assurance',status:'Limited',scope:'Software capability, fixture checks and business/service approval are separate.',offer:'Use a versioned support scope and reviewed deliverable for each case.',limit:'Current documentation does not establish general service-release approval, immutable audit custody or court readiness.',basis:'DFIR-23 matrix; DFIR-6 completion review; local audit limitations'}
+        ]}
+      };
+      const panel = root.querySelector('#lawliet-map-detail');
+      const buttons = Array.from(root.querySelectorAll('[data-branch]'));
+      const svg = root.querySelector('.links');
+      const map = root.querySelector('.mindmap');
+      let selected = 'artifacts';
+      function drawLinks() {
+        const bounds = map.getBoundingClientRect(), center = root.querySelector('.map-root').getBoundingClientRect();
+        svg.setAttribute('viewBox', `0 0 ${bounds.width} ${bounds.height}`);
+        svg.setAttribute('width', bounds.width); svg.setAttribute('height', bounds.height);
+        svg.replaceChildren();
+        buttons.forEach(button => {
+          const r=button.getBoundingClientRect(),left=r.left<center.left;
+          const x1=(left?center.left:center.right)-bounds.left,y1=center.top+center.height/2-bounds.top;
+          const x2=(left?r.right:r.left)-bounds.left,y2=r.top+r.height/2-bounds.top;
+          const path=document.createElementNS('http://www.w3.org/2000/svg','path');
+          path.setAttribute('d',`M ${x1} ${y1} C ${(x1+x2)/2} ${y1}, ${(x1+x2)/2} ${y2}, ${x2} ${y2}`);
+          if(button.dataset.branch===selected)path.setAttribute('class','selected');
+          svg.appendChild(path);
+        });
+      }
+      function textEl(tag,text,className) {const el=document.createElement(tag);el.textContent=text;if(className)el.className=className;return el;}
+      const labels={question:'Question',artifacts:'Artifacts',source:'Source',input:'Input',fields:'Checks',check:'Checks',scope:'Scope',offer:'Offer',customer:'Customer value',output:'Output',limit:'Boundary',basis:'Evidence basis'};
+      function selectBranch(key,openId,save) {
+        if(!model[key])return;
+        selected=key;
+        buttons.forEach(button=>button.setAttribute('aria-pressed',String(button.dataset.branch===key)));
+        panel.replaceChildren(textEl('h3',model[key].title));
+        const tree=document.createElement('div');tree.className='children';
+        model[key].rows.forEach(row=>{
+          const detail=document.createElement('details');detail.id='lawliet-node-'+row.id;
+          detail.open=row.id===openId;
+          const summary=document.createElement('summary');summary.className='cursor-interaction';
+          summary.append(textEl('span',row.name),textEl('span',row.status,'tag text-small'));
+          const body=document.createElement('div');body.className='detail-body';
+          const dl=document.createElement('dl');
+          Object.keys(labels).forEach(field=>{if(row[field])dl.append(textEl('dt',labels[field]),textEl('dd',row[field],field==='basis'?'text-small':''));});
+          body.append(dl);
+          if(row.related){const links=document.createElement('div');links.className='crosslinks viz-row';
+            row.related.forEach(id=>{const item=model.artifacts.rows.find(r=>r.id===id);if(!item)return;
+              const link=textEl('button',item.name,'btn btn-ghost');link.type='button';
+              link.addEventListener('click',()=>selectBranch('artifacts',id,true));links.append(link);});body.append(links);}
+          detail.append(summary,body);tree.append(detail);
+        });
+        panel.append(tree);
+        drawLinks();
+        if(save && window.openai && window.openai.setWidgetState){window.openai.setWidgetState({modelContent:{branch:key,artifact:openId||null},privateContent:{branch:key,openId:openId||null}}).catch(()=>{});}
+      }
+      buttons.forEach(button=>button.addEventListener('click',()=>selectBranch(button.dataset.branch,null,true)));
+      function applyState(state){const saved=state && state.privateContent;selectBranch(saved&&model[saved.branch]?saved.branch:'artifacts',saved&&saved.openId,false);}
+      applyState(window.openai && window.openai.widgetState);
+      window.addEventListener('openai:set_globals',event=>{const globals=event.detail&&event.detail.globals;if(globals&&globals.widgetState)applyState(globals.widgetState);});
+      new ResizeObserver(drawLinks).observe(map);
+    })();
+  </script>
+</div>
+</body></html>

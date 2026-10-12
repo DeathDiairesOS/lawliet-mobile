@@ -1,0 +1,81 @@
+{
+  "updated_at": "2026-10-12T05:09:16.646087+00:00",
+  "scope": "Classifies the existing32userrequestedLinear issues; no task cancelled or business release approved.",
+  "test_route": {
+    "test_route": "Codex -> actual Mulder MCP -> forensic tools/native parsers -> retained Ancalor case records -> GUI review/reports",
+    "backend_role": "Stores evidence/results, searches/filters, provenance/coverage/findings and exports; GUI calls backend for these operations.",
+    "current_gui_route": "GUI review operates on retained cases; Codex-driven MCP execution is distinct from the legacy autonomous GUI engine-launch adapter.",
+    "tests_role": "Known source fixtures prove narrow capabilities, while software controls test boundaries/failure handling. Case-test completion is not device-wide support.",
+    "priority": "Direct pipeline case/capability gaps first; operational and human release tracks reported separately."
+  },
+  "lanes": {
+    "evidence_case_tests": {
+      "description": "Run specific lab/customer fixtures through Mulder and verify source fields, search, interpretation, replay and reports. Directly validates our pipeline.",
+      "ids": [
+        "DFIR-46",
+        "DFIR-47",
+        "DFIR-49",
+        "DFIR-50",
+        "DFIR-51",
+        "DFIR-52",
+        "DFIR-53",
+        "DFIR-54",
+        "DFIR-55",
+        "DFIR-56",
+        "DFIR-57"
+      ],
+      "total": 11,
+      "completed": 7,
+      "remaining": 4
+    },
+    "pipeline_capabilities": {
+      "description": "Implement and test evidence storage, parsers, search, provenance, coverage, reports, collection and job handling. This backend supplies the GUI.",
+      "ids": [
+        "DFIR-6",
+        "DFIR-23",
+        "DFIR-26",
+        "DFIR-28",
+        "DFIR-29",
+        "DFIR-30",
+        "DFIR-31",
+        "DFIR-58",
+        "DFIR-59",
+        "DFIR-60",
+        "DFIR-61",
+        "DFIR-62",
+        "DFIR-63",
+        "DFIR-64"
+      ],
+      "total": 14,
+      "completed": 4,
+      "remaining": 10
+    },
+    "technical_operations": {
+      "description": "Transfer/access, component licenses, backups/retention and data-processing defaults. Supports safe operation, distinct from parser accuracy.",
+      "ids": [
+        "DFIR-25",
+        "DFIR-27",
+        "DFIR-35",
+        "DFIR-36"
+      ],
+      "total": 4,
+      "completed": 0,
+      "remaining": 4
+    },
+    "examiner_and_business_release": {
+      "description": "Blind human workflow/reviewer qualification and signed service release. Separate from verified software capability and never a blanket blocker on other technical tickets.",
+      "ids": [
+        "DFIR-32",
+        "DFIR-37",
+        "DFIR-48"
+      ],
+      "total": 3,
+      "completed": 0,
+      "remaining": 3
+    }
+  },
+  "completed": 11,
+  "remaining": 21,
+  "direct_pipeline_tickets_remaining": 14,
+  "time_estimate": "Not inferred from ticket count; remaining scopes vary and many have partial passing evidence."
+}

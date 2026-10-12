@@ -1,0 +1,7 @@
+# Merge into local Codex configuration after installing the pinned/patched
+# Mulder and Lawliet packages in the same forensic virtual environment.
+# Replace the example interpreter-independent executable path below.
+# This starts only the MCP tool server, not mulder investigate.
+[mcp_servers.mulder]
+command = "/path/to/forensic-venv/bin/mulder"
+args = ["serve"]

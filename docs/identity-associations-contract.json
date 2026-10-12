@@ -1,0 +1,66 @@
+{
+  "schema_version": 1,
+  "requirement": "MOB-040",
+  "status": "partial backend and stdio implementation; no independent acceptance",
+  "actions": {
+    "identity-record": {
+      "event": "observe, merge or split event"
+    },
+    "identity-history": {
+      "after": "nonnegative audit cursor",
+      "limit": "1\u2013100"
+    },
+    "identity-groups": {}
+  },
+  "common_fields": [
+    "kind",
+    "examiner",
+    "rationale"
+  ],
+  "observe": {
+    "required": [
+      "artifact_id",
+      "source_field",
+      "identifier_type",
+      "namespace"
+    ],
+    "identifier_type": [
+      "phone",
+      "email",
+      "app-id",
+      "account"
+    ],
+    "source_field": "RFC6901 JSON pointer into case-local artifact snapshot; ~0/~1 supported and array indexes canonical ASCII decimals only",
+    "raw_values": "Exact JSON strings for all supported types; exact integers additionally for app-id/account. No numeric coercion, case folding, normalization or automatic association. Booleans/null/floats unsupported.",
+    "provenance": "Original artifact ID/evidence/file/source reference/parser/logical path/source hash plus immutable bounded artifact snapshot and its hash, preserving original labels/profile/source tier."
+  },
+  "merge": {
+    "required": [
+      "observation_ids",
+      "confirmed"
+    ],
+    "limits": "2\u201332 distinct case-local observation IDs; confirmed must be JSON true",
+    "meaning": "Examiner-asserted relationship; not authenticated personal identity."
+  },
+  "split": {
+    "required": [
+      "association_id",
+      "confirmed"
+    ],
+    "meaning": "Withdraws one active merge assertion, retaining all history and original observations. Other active assertions can still connect these observations transitively. Reassociation requires a new merge."
+  },
+  "limits": {
+    "artifact_snapshot_bytes": 131072,
+    "history_events": 10000,
+    "history_bytes": 16777216,
+    "behavior": "Reject before append or response materialization when capacity exceeded; explicit error, never silent truncation."
+  },
+  "integrity": "Audit chain checked before reads and writes; serialized append; no update/delete API. Local chain is not immutable or signed storage. Snapshots survive reparsing; source artifacts/conversation IDs never rewritten.",
+  "pending": [
+    "UI identity viewer/confirmation integration",
+    "Independent schema-specific acceptance and examiner workflow review",
+    "Authenticated identity/authority and signed retention are not implemented",
+    "No automatic graph propagation into findings, conversations or customer reports",
+    "Source snapshots reference imported artifacts; association is not independent source authenticity proof"
+  ]
+}

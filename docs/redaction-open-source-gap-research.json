@@ -1,0 +1,46 @@
+{
+  "researched_at": "2026-10-12T01:10:48.206230+00:00",
+  "issue": "DFIR-59/31",
+  "gap": "Known redacted strings must be absent from all customer outputs, attachments, thumbnails, metadata and indexes. Current internal draft is unredacted and refuses redaction requests.",
+  "candidates": [
+    {
+      "name": "Presidio",
+      "official_sources": [
+        "https://presidio.dataprivacystack.org/text_anonymization/",
+        "https://presidio.dataprivacystack.org/faq/",
+        "https://github.com/data-privacy-stack/presidio/blob/main/LICENSE"
+      ],
+      "license_observed": "MIT",
+      "potential": "Offline text entity identification and explicit anonymization operators; structured data helpers.",
+      "scope_limit": "Detection is probabilistic/rule/model dependent and does not alone establish no remaining sensitive data. Whole report-package surfaces require separate deterministic canary checks and operator review.",
+      "installed": false,
+      "release_approved": false
+    },
+    {
+      "name": "PyMuPDF",
+      "official_sources": [
+        "https://pymupdf.readthedocs.io/en/latest/page.html",
+        "https://pymupdf.readthedocs.io/en/latest/document.html",
+        "https://pymupdf.readthedocs.io/en/latest/about.html"
+      ],
+      "license_observed": "AGPL or commercial alternatives; distribution decision pending",
+      "potential": "PDF redaction application plus document scrub controls for metadata, thumbnails, embedded files and other surfaces.",
+      "scope_limit": "PDF-specific; rectangles/content/image options and non-incremental clean output need dedicated validation, does not cover arbitrary binary files.",
+      "installed_for_this_gap": false,
+      "release_approved": false
+    },
+    {
+      "name": "ExifTool",
+      "official_sources": [
+        "https://exiftool.org/faq.html",
+        "https://exiftool.org/TagNames/PDF.html"
+      ],
+      "potential": "Existing metadata inventory engine may help inspect media output.",
+      "scope_limit": "No text/image pixel redaction. Documentation fetch blocked403 this review; do not treat unverified metadata stripping as safe PDF redaction.",
+      "standalone_gap_resolved": false
+    }
+  ],
+  "implementation_decision": "No library alone satisfies full package acceptance. Preserve existing release refusal. Start with explicit output-format and surface policy, separately generated derived outputs, source unchanged checks, canaries and review; only integrate a component after scoped synthetic proof and exact version/license pins.",
+  "formal_acceptance": false,
+  "no_case_data_transmitted": "Research queries contain feature/library names only; no acquired evidence uploaded."
+}

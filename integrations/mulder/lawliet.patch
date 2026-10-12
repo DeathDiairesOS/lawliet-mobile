@@ -1,0 +1,2001 @@
+diff --git a/src/mulder/__init__.py b/src/mulder/__init__.py
+index f317206..e813fef 100644
+--- a/src/mulder/__init__.py
++++ b/src/mulder/__init__.py
+@@ -1,3 +1,3 @@
+ """Mulder: custom MCP server for SANS SIFT Workstation forensic investigations."""
+ 
+-__version__ = "1.5.2"
++__version__ = "1.5.2+lawliet.1"
+diff --git a/src/mulder/server/extract_helpers.py b/src/mulder/server/extract_helpers.py
+index 093813f..525c25f 100644
+--- a/src/mulder/server/extract_helpers.py
++++ b/src/mulder/server/extract_helpers.py
+@@ -104,53 +104,36 @@ _INSERT_BATCH_SIZE = 5000
+ 
+ 
+ def _line_aligned_windows(raw_output: str) -> Iterator[tuple[str, int, int]]:
+-    """Yield ``(text, first_line, last_line)`` windows that never split a line.
+-
+-    Windows used to be cut at absolute character offsets
+-    (``raw_output[offset : offset + 4096]``), which severs whichever record
+-    straddles the boundary.  Around twenty callers then read *one* record out
+-    of each window -- a PID, a module name, a command line -- so a severed row
+-    does not merely lose data, it yields a **wrong** value: a truncated PID
+-    that still parses as an integer, or a process name from one row paired
+-    with the PID from another.  Two windows sampled from the same output can
+-    then be diffed against each other and produce fabricated "hidden process"
+-    or "hidden module" findings.
+-
+-    Line numbers are 1-based and inclusive -- which is what the ``line_start``
+-    and ``line_end`` columns have always claimed to hold, and did not.
+-
+-    A single line longer than the window budget is still split, because it has
+-    to be; that is pathological input (a whole file on one line) rather than
+-    the routine case.
++    """Yield lossless LF-delimited windows with a soft character budget.
++
++    A logical record longer than the budget occupies one oversized window.
++    Unicode line separators and control characters inside JSON strings are
++    data, not record boundaries. Preserve every character and line ending.
+     """
+     budget = _WINDOW_CHAR_BUDGET
+     current: list[str] = []
+     current_len = 0
+     first_line = 1
+     last_line = 1
+-
+-    for line_no, line in enumerate(raw_output.splitlines(keepends=True), start=1):
+-        pieces = (
+-            [line[i : i + budget] for i in range(0, len(line), budget)]
+-            if len(line) > budget
+-            else [line]
+-        )
+-        for piece in pieces:
+-            if current and current_len + len(piece) > budget:
+-                text = "".join(current)
+-                if text.strip():
+-                    yield text, first_line, last_line
+-                current = []
+-                current_len = 0
+-                first_line = line_no
+-            current.append(piece)
+-            current_len += len(piece)
+-            last_line = line_no
+-
++    offset = 0
++    line_no = 0
++    while offset < len(raw_output):
++        line_no += 1
++        end = raw_output.find("\n", offset)
++        end = len(raw_output) if end < 0 else end + 1
++        line = raw_output[offset:end]
++        offset = end
++        if current and current_len + len(line) > budget:
++            yield "".join(current), first_line, last_line
++            current = []
++            current_len = 0
++        if not current:
++            first_line = line_no
++        current.append(line)
++        current_len += len(line)
++        last_line = line_no
+     if current:
+-        text = "".join(current)
+-        if text.strip():
+-            yield text, first_line, last_line
++        yield "".join(current), first_line, last_line
+ 
+ 
+ def extract_and_index(
+@@ -161,8 +144,8 @@ def extract_and_index(
+ ) -> dict[str, object]:
+     """Split raw tool output into windows and store in the case DB.
+ 
+-    Registers a source, splits text into fixed-size windows (4 lines
+-    each), extracts timestamps, and inserts into the database in
++    Registers a source, groups complete LF-delimited lines into windows
++    with a soft character budget, extracts timestamps, and inserts in
+     batches of ``_INSERT_BATCH_SIZE`` to bound peak memory.
+ 
+     Returns a summary dict with ``source_name``, ``windows_indexed``,
+diff --git a/src/mulder/server/tools/__init__.py b/src/mulder/server/tools/__init__.py
+index 3809d80..3baae51 100644
+--- a/src/mulder/server/tools/__init__.py
++++ b/src/mulder/server/tools/__init__.py
+@@ -1,6 +1,8 @@
+ """MCP tool modules. Importing this package registers all tools."""
+ 
+ from mulder.server.tools import (  # noqa: F401  # noqa: F401
++    lawliet_evidence_viewer,
++    lawliet_sqlite_workspace,
+     artifacts,
+     attack,
+     binary,
+diff --git a/src/mulder/server/tools/case.py b/src/mulder/server/tools/case.py
+index c258bac..9064d1e 100644
+--- a/src/mulder/server/tools/case.py
++++ b/src/mulder/server/tools/case.py
+@@ -11,6 +11,7 @@ import hashlib
+ import json
+ import logging
+ import os
++import stat
+ import shutil
+ import subprocess
+ import tarfile
+@@ -479,7 +480,7 @@ def verify_evidence_integrity() -> dict[str, object]:
+     return result
+ 
+ 
+-def _extract_zip(archive: Path, dest: Path) -> list[str]:
++def _extract_zip(archive: Path, dest: Path, password: str | None = None) -> list[str]:
+     """Extract a zip archive to *dest* and return paths relative to *dest*.
+ 
+     Falls back to the ``7z`` binary when Python's zipfile module cannot
+@@ -487,12 +488,25 @@ def _extract_zip(archive: Path, dest: Path) -> list[str]:
+     """
+     try:
+         with zipfile.ZipFile(archive, "r") as zf:
++            if password is not None:
++                zf.setpassword(password.encode('utf-8'))
++                members = zf.infolist()
++                total = sum(m.file_size for m in members)
++                if len(members) > 100000 or total > 20 * 1024**3 or total + 1024**3 > shutil.disk_usage(dest).free:
++                    raise ValueError('Password ZIP exceeds file/size/disk-reserve limits')
++                for member in members:
++                    parts = Path(member.filename).parts
++                    if (member.filename.startswith(('/', '\\')) or '..' in parts or '\\' in member.filename
++                            or stat.S_ISLNK(member.external_attr >> 16)):
++                        raise ValueError('Unsafe password ZIP entry')
+             for member in zf.namelist():
+                 if member.startswith("/") or ".." in member:
+                     logger.warning("Skipping unsafe zip entry: %r", member)
+                     continue
+                 zf.extract(member, dest)
+     except (NotImplementedError, zipfile.BadZipFile):
++        if password is not None:
++            raise ValueError('Password ZIP encryption/compression unsupported by this decoder; no shell-password fallback')
+         if not shutil.which("7z"):
+             raise
+         return _extract_7z(archive, dest)
+@@ -609,6 +623,7 @@ def _archive_slot(archive: Path) -> str:
+ def extract_archive(
+     archive_path: str,
+     extract_to: str | None = None,
++    password: str | None = None,
+ ) -> dict[str, object]:
+     """Extract a compressed evidence archive to make its contents accessible.
+ 
+@@ -624,10 +639,15 @@ def extract_archive(
+         archive_path: Path to the compressed archive.
+         extract_to: Optional destination directory.  If omitted, creates
+             a directory under the mulder cases dir.
++        password: Optional supplied ZIP password (ZipCrypto). Never recorded in
++            audit parameters or passed to a process command line. Other encrypted
++            archive formats require a separately supported decoder.
+     """
+     tc_id = make_tool_call_id()
+     t0 = time.monotonic()
+-    params: dict[str, object] = {"archive_path": archive_path, "extract_to": extract_to}
++    params: dict[str, object] = {"archive_path": archive_path, "extract_to": extract_to, "password_supplied": password is not None}
++    if password is not None and (not isinstance(password, str) or not 1 <= len(password) <= 1024):
++        return error_response(tc_id, 'extract_archive', params, 'Use a nonempty supplied password of at most 1024 characters', error_type='invalid_input')
+ 
+     archive = Path(archive_path).expanduser().resolve()
+ 
+@@ -697,7 +717,9 @@ def extract_archive(
+ 
+     try:
+         if ext == ".zip":
+-            files = _extract_zip(archive, dest)
++            files = _extract_zip(archive, dest, password)
++        elif password is not None:
++            raise ValueError('Supplied passwords are supported for ZIP only')
+         elif ext in (".tar", ".tgz") or name_lower.endswith((".tar.gz", ".tar.bz2")):
+             files = _extract_tar(archive, dest)
+         elif ext in (".gz", ".bz2"):
+diff --git a/src/mulder/server/tools/core.py b/src/mulder/server/tools/core.py
+index e8c2db7..f2834b1 100644
+--- a/src/mulder/server/tools/core.py
++++ b/src/mulder/server/tools/core.py
+@@ -929,7 +929,9 @@ def get_raw_output(
+     read one image's rows; without it, an ambiguous name returns an
+     error listing the candidate paths rather than mixing images.
+ 
+-    Returns raw_text with keyset pagination. Pass ``next_after_id`` from
++    Returns raw_text with keyset pagination. Concatenate page raw_text values
++    directly (without inserting newlines) to reconstruct a single source.
++    Pass ``next_after_id`` from
+     the response to get subsequent pages. Every page is equally fast
+     regardless of position.
+ 
+@@ -967,7 +969,17 @@ def get_raw_output(
+     page, total = ctx.db.get_windows_page(
+         source_name, after_id=after_id, limit=limit, source_ids=source_ids
+     )
+-    raw_text = "\n".join(w.raw_text for w in page)
++    # Indexed windows retain their own line endings. Injecting separators
++    # corrupts oversized records from older indexes and adds blank lines to
++    # newly indexed output. Concatenate each source verbatim.
++    chunks = []
++    previous_source_id = None
++    for window in page:
++        if previous_source_id is not None and window.source_id != previous_source_id:
++            chunks.append("\n")
++        chunks.append(window.raw_text)
++        previous_source_id = window.source_id
++    raw_text = "".join(chunks)
+ 
+     next_after = page[-1].window_id if page else after_id
+ 
+diff --git a/src/mulder/server/tools/mvt.py b/src/mulder/server/tools/mvt.py
+index 5df7bbb..a150878 100644
+--- a/src/mulder/server/tools/mvt.py
++++ b/src/mulder/server/tools/mvt.py
+@@ -8,7 +8,6 @@ with optional STIX2 IOC matching.
+ 
+ from __future__ import annotations
+ 
+-import contextlib
+ import json
+ import logging
+ import shutil
+@@ -28,35 +27,39 @@ _MVT_TIMEOUT = 600
+ _STDERR_PREVIEW_CHARS = 500
+ 
+ 
+-def _collect_mvt_results(output_dir: str) -> tuple[str, dict[str, int]]:
+-    """Read JSON result files from MVT output and return combined text + counts."""
++def _collect_mvt_results(output_dir: str, errors: list[dict[str, str]] | None = None) -> tuple[str, dict[str, int]]:
++    """Index readable derivatives and report every unreadable/unsupported result."""
+     parts: list[str] = []
+     module_counts: dict[str, int] = {}
+-
+-    for result_file in sorted(Path(output_dir).rglob("*.json")):
+-        if not result_file.is_file() or result_file.stat().st_size == 0:
++    errors = errors if errors is not None else []
++    root = Path(output_dir)
++    for result_file in sorted(root.rglob('*')):
++        if result_file.suffix not in {'.json', '.csv'} or result_file.name == 'mulder-retention-manifest.json':
+             continue
+-        with contextlib.suppress(OSError, json.JSONDecodeError):
+-            data = json.loads(result_file.read_text(encoding="utf-8", errors="replace"))
++        relative = str(result_file.relative_to(root))
++        try:
++            if result_file.is_symlink() or not result_file.is_file():
++                raise ValueError('Result is not a regular file')
++            if result_file.stat().st_size > 64*1024**2:
++                raise ValueError('Result exceeds 64 MiB indexing ceiling; retained in full')
++            text = result_file.read_text(encoding='utf-8')
++            if result_file.suffix == '.csv':
++                if text.strip():
++                    parts.append(f'=== {relative} ===\n{text}')
++                continue
++            data = json.loads(text)
++            key = relative[:-5]
+             if isinstance(data, list):
+-                module_counts[result_file.stem] = len(data)
+-                # Every counted record must reach the index: module_counts is
+-                # reported to the analyst as the number of findings, so any
+-                # record dropped here becomes a detection that is claimed but
+-                # cannot be found by search().
++                module_counts[key] = len(data)
+                 parts.extend(json.dumps(item, default=str) for item in data)
+             elif isinstance(data, dict):
+-                module_counts[result_file.stem] = 1
++                module_counts[key] = 1
+                 parts.append(json.dumps(data, default=str))
+-
+-    for timeline_file in sorted(Path(output_dir).rglob("*.csv")):
+-        if not timeline_file.is_file() or timeline_file.stat().st_size == 0:
+-            continue
+-        with contextlib.suppress(OSError):
+-            text = timeline_file.read_text(encoding="utf-8", errors="replace")
+-            parts.append(f"=== {timeline_file.name} ===\n{text}")
+-
+-    return "\n".join(parts), module_counts
++            else:
++                raise ValueError('JSON result is neither an object nor an array')
++        except (OSError, ValueError, UnicodeError) as exc:
++            errors.append({'file':relative, 'error':str(exc)})
++    return '\n'.join(parts), module_counts
+ 
+ 
+ @mcp.tool()
+@@ -98,6 +101,11 @@ def run_mvt_android(
+             error_type="file_not_found",
+         )
+ 
++    if iocs and not Path(iocs).is_file():
++        return error_response(tc_id, tool_name, params,
++                              f"Requested IOC file not found or not a regular file: {iocs}",
++                              error_type="ioc_file_missing")
++
+     with tempfile.TemporaryDirectory(prefix="mulder_mvt_android_") as tmpdir:
+         if Path(evidence_path).is_dir():
+             cmd = ["mvt-android", "check-backup", "-o", tmpdir, evidence_path]
+@@ -107,38 +115,32 @@ def run_mvt_android(
+         if iocs and Path(iocs).is_file():
+             cmd.extend(["--iocs", iocs])
+ 
++        issues = []
++        returncode = None
+         try:
+-            proc = subprocess.run(
+-                cmd,
+-                capture_output=True,
+-                text=True,
+-                timeout=_MVT_TIMEOUT,
+-                check=False,
+-            )
+-        except subprocess.TimeoutExpired:
+-            return error_response(
+-                tc_id,
+-                tool_name,
+-                params,
+-                f"mvt-android timed out after {_MVT_TIMEOUT}s",
+-                elapsed_ms=(time.monotonic() - t0) * 1000,
+-            )
+-
+-        raw_output, module_counts = _collect_mvt_results(tmpdir)
+-
+-        if proc.returncode != 0 and not raw_output.strip():
+-            detail = (proc.stderr.strip() or proc.stdout.strip())[:_STDERR_PREVIEW_CHARS]
+-            return error_response(
+-                tc_id,
+-                tool_name,
+-                params,
+-                f"mvt-android exited {proc.returncode} and produced no results: {detail}",
+-                elapsed_ms=(time.monotonic() - t0) * 1000,
+-                error_type="tool_failed",
+-            )
+-
+-        if not raw_output.strip():
+-            raw_output = proc.stdout.strip() or proc.stderr.strip()
++            proc = subprocess.run(cmd, capture_output=True, text=True,
++                                  timeout=_MVT_TIMEOUT, check=False)
++            returncode = proc.returncode
++            if returncode != 0:
++                issues.append({'error':f'MVT exited with status {returncode}'})
++            stdout, stderr = proc.stdout or '', proc.stderr or ''
++        except (subprocess.TimeoutExpired, OSError) as exc:
++            issues.append({'error':'MVT timed out' if isinstance(exc, subprocess.TimeoutExpired) else 'MVT could not execute'})
++            stdout, stderr = getattr(exc,'stdout','') or '', getattr(exc,'stderr','') or ''
++        for label, text in [('stdout',stdout),('stderr',stderr)]:
++            if isinstance(text, bytes):
++                text = text.decode('utf-8', errors='replace')
++            (Path(tmpdir)/('mulder-process-'+label+'.txt')).write_text(text)
++        raw_output, module_counts = _collect_mvt_results(tmpdir, issues)
++        state = ('limited' if raw_output.strip() else 'failed') if issues else ('parsed' if raw_output.strip() else 'empty')
++        receipt = {'state':state,'subprocess_returncode':returncode,'errors':issues,
++                   'scope':'Readable supplied outputs only; execution success is not device completeness or spyware clearance.'}
++        (Path(tmpdir)/'mulder-execution-receipt.txt').write_text(json.dumps(receipt,indent=2))
++        from mulder.server.tools.phone import _retain_leapp_output
++        try:
++            retained = _retain_leapp_output(Path(tmpdir), tc_id, tool_name)
++        except (OSError,ValueError,RuntimeError):
++            return error_response(tc_id,tool_name,params,'MVT derivatives could not be safely retained',error_type='retention_failed')
+ 
+     index_result = extract_and_index(
+         raw_output,
+@@ -156,15 +158,23 @@ def run_mvt_android(
+     elapsed = (time.monotonic() - t0) * 1000
+     result: dict[str, object] = {
+         "evidence_path": evidence_path,
+-        "modules_run": list(module_counts.keys()),
++        "modules_with_output": list(module_counts.keys()),
++        "retained_output": str(retained),
++        "ioc_matching_requested": bool(iocs),
++        "limitation": "Output records are not indicators; filename alert counts are not a validated compromise verdict. No-match or absent IOC data does not rule out spyware.",
+         "module_counts": module_counts,
+-        "total_indicators": sum(module_counts.values()),
+-        "detections": detections,
++        "output_records": sum(module_counts.values()),
++        "legacy_filename_alert_record_count": detections,
+         "iocs_file": iocs or None,
+         "index": index_result,
+     }
+ 
+-    return tool_response(tc_id, tool_name, params, result, "mvt.android", elapsed)
++    result.update(receipt)
++    response = tool_response(tc_id, tool_name, params, result, "mvt.android", elapsed)
++    response.update(receipt)
++    response['retained_output'] = str(retained)
++    response['status'] = 'error' if state == 'failed' else 'limited' if state == 'limited' else 'success'
++    return response
+ 
+ 
+ @mcp.tool()
+@@ -211,6 +221,15 @@ def run_mvt_ios(
+             error_type="file_not_found",
+         )
+ 
++    if mode not in {"backup", "fs"}:
++        return error_response(tc_id, tool_name, params,
++                              "MVT iOS mode must be 'backup' or 'fs'.",
++                              error_type="invalid_input")
++    if iocs and not Path(iocs).is_file():
++        return error_response(tc_id, tool_name, params,
++                              f"Requested IOC file not found or not a regular file: {iocs}",
++                              error_type="ioc_file_missing")
++
+     with tempfile.TemporaryDirectory(prefix="mulder_mvt_ios_") as tmpdir:
+         subcommand = "check-fs" if mode == "fs" else "check-backup"
+         cmd = ["mvt-ios", subcommand, "-o", tmpdir, evidence_path]
+@@ -218,38 +237,32 @@ def run_mvt_ios(
+         if iocs and Path(iocs).is_file():
+             cmd.extend(["--iocs", iocs])
+ 
++        issues = []
++        returncode = None
++        try:
++            proc = subprocess.run(cmd, capture_output=True, text=True,
++                                  timeout=_MVT_TIMEOUT, check=False)
++            returncode = proc.returncode
++            if returncode != 0:
++                issues.append({'error':f'MVT exited with status {returncode}'})
++            stdout, stderr = proc.stdout or '', proc.stderr or ''
++        except (subprocess.TimeoutExpired, OSError) as exc:
++            issues.append({'error':'MVT timed out' if isinstance(exc, subprocess.TimeoutExpired) else 'MVT could not execute'})
++            stdout, stderr = getattr(exc,'stdout','') or '', getattr(exc,'stderr','') or ''
++        for label, text in [('stdout',stdout),('stderr',stderr)]:
++            if isinstance(text, bytes):
++                text = text.decode('utf-8', errors='replace')
++            (Path(tmpdir)/('mulder-process-'+label+'.txt')).write_text(text)
++        raw_output, module_counts = _collect_mvt_results(tmpdir, issues)
++        state = ('limited' if raw_output.strip() else 'failed') if issues else ('parsed' if raw_output.strip() else 'empty')
++        receipt = {'state':state,'subprocess_returncode':returncode,'errors':issues,
++                   'scope':'Readable supplied outputs only; execution success is not device completeness or spyware clearance.'}
++        (Path(tmpdir)/'mulder-execution-receipt.txt').write_text(json.dumps(receipt,indent=2))
++        from mulder.server.tools.phone import _retain_leapp_output
+         try:
+-            proc = subprocess.run(
+-                cmd,
+-                capture_output=True,
+-                text=True,
+-                timeout=_MVT_TIMEOUT,
+-                check=False,
+-            )
+-        except subprocess.TimeoutExpired:
+-            return error_response(
+-                tc_id,
+-                tool_name,
+-                params,
+-                f"mvt-ios timed out after {_MVT_TIMEOUT}s",
+-                elapsed_ms=(time.monotonic() - t0) * 1000,
+-            )
+-
+-        raw_output, module_counts = _collect_mvt_results(tmpdir)
+-
+-        if proc.returncode != 0 and not raw_output.strip():
+-            detail = (proc.stderr.strip() or proc.stdout.strip())[:_STDERR_PREVIEW_CHARS]
+-            return error_response(
+-                tc_id,
+-                tool_name,
+-                params,
+-                f"mvt-ios exited {proc.returncode} and produced no results: {detail}",
+-                elapsed_ms=(time.monotonic() - t0) * 1000,
+-                error_type="tool_failed",
+-            )
+-
+-        if not raw_output.strip():
+-            raw_output = proc.stdout.strip() or proc.stderr.strip()
++            retained = _retain_leapp_output(Path(tmpdir), tc_id, tool_name)
++        except (OSError,ValueError,RuntimeError):
++            return error_response(tc_id,tool_name,params,'MVT derivatives could not be safely retained',error_type='retention_failed')
+ 
+     index_result = extract_and_index(
+         raw_output,
+@@ -268,12 +281,215 @@ def run_mvt_ios(
+     result: dict[str, object] = {
+         "evidence_path": evidence_path,
+         "mode": mode,
+-        "modules_run": list(module_counts.keys()),
++        "modules_with_output": list(module_counts.keys()),
++        "retained_output": str(retained),
++        "ioc_matching_requested": bool(iocs),
++        "limitation": "Output records are not indicators; filename alert counts are not a validated compromise verdict. No-match or absent IOC data does not rule out spyware.",
+         "module_counts": module_counts,
+-        "total_indicators": sum(module_counts.values()),
+-        "detections": detections,
++        "output_records": sum(module_counts.values()),
++        "legacy_filename_alert_record_count": detections,
+         "iocs_file": iocs or None,
+         "index": index_result,
+     }
+ 
+-    return tool_response(tc_id, tool_name, params, result, "mvt.ios", elapsed)
++    result.update(receipt)
++    response = tool_response(tc_id, tool_name, params, result, "mvt.ios", elapsed)
++    response.update(receipt)
++    response['retained_output'] = str(retained)
++    response['status'] = 'error' if state == 'failed' else 'limited' if state == 'limited' else 'success'
++    return response
++
++
++def _backup_inventory(root: Path, max_backup_bytes: int = 2 * 1024**3) -> dict[str, dict[str, object]]:
++    """Bound inventory by both declared stat sizes and actual hashed bytes."""
++    import hashlib
++    import os
++    import stat
++    if type(max_backup_bytes) is not int or not 0 < max_backup_bytes <= 3 * 1024**3:
++        raise ValueError('Invalid backup inventory byte ceiling')
++    if root.is_symlink() or not root.is_dir():
++        raise ValueError('Backup must be a regular directory')
++    result = {}
++    total = 0
++    def identity(info):
++        return (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns, info.st_ctime_ns)
++    for entries, path in enumerate(root.rglob('*'), 1):
++        if entries > 200000:
++            raise ValueError('Backup exceeds 200000 filesystem entries')
++        if path.is_symlink():
++            raise ValueError('Backup symlinks are not supported')
++        if path.is_dir():
++            continue
++        initial = path.stat()
++        if not stat.S_ISREG(initial.st_mode):
++            raise ValueError('Backup contains a nonregular file')
++        relative = str(path.relative_to(root))
++        file_limit = min(max_backup_bytes, 2*1024**3 if relative == 'Manifest.db'
++                         else 16*1024**2 if relative == 'Manifest.plist' else max_backup_bytes)
++        if len(result) >= 100000 or initial.st_size > file_limit or total + initial.st_size > max_backup_bytes:
++            raise ValueError('Backup exceeds file count, per-file or selected byte ceiling')
++        hashed = hashlib.sha256()
++        file_bytes = 0
++        with path.open('rb') as stream:
++            if identity(os.fstat(stream.fileno())) != identity(initial):
++                raise ValueError('Backup file changed before hashing')
++            while True:
++                # One extra byte detects growth without allowing unbounded reads
++                # or hashing beyond the initial per-file / overall ceilings.
++                chunk = stream.read(min(1024**2, initial.st_size - file_bytes + 1,
++                                        max_backup_bytes - total + 1))
++                if not chunk:
++                    break
++                if file_bytes + len(chunk) > initial.st_size or total + len(chunk) > max_backup_bytes:
++                    raise ValueError('Backup file grew while hashing')
++                file_bytes += len(chunk)
++                total += len(chunk)
++                hashed.update(chunk)
++            if file_bytes != initial.st_size or identity(os.fstat(stream.fileno())) != identity(initial):
++                raise ValueError('Backup file changed while hashing')
++        if identity(path.stat()) != identity(initial):
++            raise ValueError('Backup file changed after hashing')
++        result[relative] = {'bytes':file_bytes,'sha256':hashed.hexdigest()}
++    return result
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def run_mvt_decrypt_backup(evidence_path: str, max_backup_bytes: int = 2 * 1024**3) -> dict[str, object]:
++    """Decrypt a supplied iTunes backup using an already-known host password.
++
++    Set MVT_IOS_BACKUP_PASSWORD in the MCP server environment before launch.
++    Never pass a password in a tool argument. No password guessing or device
++    access. Operates on a disposable copy; retains output and completeness receipt.
++    max_backup_bytes must be exactly 2147483648 (default) or 3221225472.
++    """
++    import os
++    import plistlib
++    import sqlite3
++    from contextlib import closing
++    from lawliet_mobile.tools import execute, storage_guard
++    from mulder.server.tools.phone import _retain_leapp_output
++    tc_id = make_tool_call_id()
++    name = 'run_mvt_decrypt_backup'
++    params = {'evidence_path':evidence_path, 'max_backup_bytes':max_backup_bytes}
++    def error(message, kind='invalid_input'):
++        return error_response(tc_id,name,params,message,error_type=kind)
++    if type(max_backup_bytes) is not int or max_backup_bytes not in {2*1024**3, 3*1024**3}:
++        return error('max_backup_bytes must be exactly 2147483648 (2 GiB) or 3221225472 (3 GiB).')
++    working_byte_limit = 3 * max_backup_bytes
++    if not shutil.which('mvt-ios'):
++        return error('mvt-ios is unavailable','binary_missing')
++    secret = os.environ.get('MVT_IOS_BACKUP_PASSWORD')
++    if not secret:
++        return error('Set MVT_IOS_BACKUP_PASSWORD in the host server environment; no password was supplied.','credential_missing')
++    source = Path(evidence_path)
++    try:
++        before = _backup_inventory(source, max_backup_bytes)
++        if 'Manifest.db' not in before or 'Manifest.plist' not in before:
++            raise ValueError('Backup requires Manifest.db and Manifest.plist at its root')
++        if before['Manifest.plist']['bytes'] > 16*1024**2:
++            raise ValueError('Manifest.plist exceeds 16 MiB ceiling')
++        info = plistlib.loads((source/'Manifest.plist').read_bytes())
++        if not isinstance(info,dict) or info.get('IsEncrypted') is not True:
++            raise ValueError('Backup is not explicitly marked encrypted')
++        # Admission uses measured input, not the optional ceiling as allocation.
++        # The runtime guard can still abort as footprint/free space evolves.
++        size = sum(row['bytes'] for row in before.values())
++        if shutil.disk_usage(tempfile.gettempdir()).free < 3*size + 8*1024**3:
++            raise ValueError('Insufficient space for controlled copies and 8 GiB reserve')
++    except (OSError,ValueError,plistlib.InvalidFileException) as exc:
++        return error(str(exc))
++    with tempfile.TemporaryDirectory(prefix='mulder_decrypt_') as tmp:
++        working = Path(tmp)/'working'
++        try:
++            shutil.copytree(source,working)
++            if _backup_inventory(working, max_backup_bytes) != before:
++                return error('Backup changed while copying','integrity_error')
++        except (OSError, ValueError):
++            return error('Backup could not be copied and verified','integrity_error')
++        output = Path(tmp)/'output';output.mkdir()
++        decrypted = output/'decrypted'
++        command = ['mvt-ios','decrypt-backup','--jobs','1','--destination',str(decrypted),str(working)]
++        failure = None
++        try:
++            proc = execute(command,output/'decrypt.log',timeout=1800,
++                           guard=storage_guard(Path(tmp),working_byte_limit,reserve=8*1024**3))
++            if proc['returncode'] != 0:
++                failure = 'MVT returned a nonzero exit status'
++        except Exception as exc:
++            failure = 'Decryption interrupted: '+type(exc).__name__
++        # Keep credentials out of retained logs and responses even if a tool
++        # accidentally writes them. Tool arguments never contain credentials.
++        logs_truncated = False
++        for path in output.glob('decrypt.log*'):
++            with path.open('rb') as log:
++                content = log.read(16*1024**2 + 1)
++            if len(content) > 16*1024**2:
++                logs_truncated = True
++                # Discard the boundary line so no partially read credential is retained.
++                content = content[:16*1024**2].rsplit(b'\n',1)[0] if b'\n' in content[:16*1024**2] else b''
++            path.write_text(content.decode(errors='replace').replace(secret,'[REDACTED]'))
++        try:
++            unchanged = _backup_inventory(source, max_backup_bytes) == before
++        except (OSError,ValueError):
++            unchanged = False
++        if not unchanged:
++            failure = 'Original backup changed or could not be verified after decryption'
++        expected = [];missing = []
++        manifest = decrypted/'Manifest.db'
++        if failure is None:
++            try:
++                _backup_inventory(decrypted, max_backup_bytes)  # Reject nonregular/symlink output before SQLite access.
++                if manifest.is_symlink() or not manifest.is_file() or manifest.stat().st_size > 2*1024**3:
++                    raise ValueError('Decrypted manifest missing or outside file limits')
++                with closing(sqlite3.connect(manifest.as_uri()+'?mode=ro',uri=True)) as db:
++                    expected = [row[0] for row in db.execute('SELECT fileID FROM Files WHERE flags=1 LIMIT 100001')]
++                if len(expected)>100000:
++                    raise ValueError('Decrypted manifest exceeds 100000 regular-file rows')
++                import re
++                if any(not isinstance(fid,str) or not re.fullmatch('[0-9a-fA-F]{40}',fid) for fid in expected):
++                    raise ValueError('Invalid fileID in decrypted manifest')
++                missing = [fid for fid in expected if not (decrypted/fid[:2]/fid).is_file()]
++            except (OSError,ValueError,sqlite3.Error):
++                failure = 'Decrypted manifest unavailable or invalid'
++        state = 'failed' if failure or not unchanged else 'limited' if missing else 'complete'
++        derived_plist = None
++        if state == 'complete':
++            # MVT can copy the encrypted backup metadata unchanged even after
++            # decrypting every payload. Preserve that emitted metadata verbatim,
++            # then label only this complete, verified derived backup unencrypted.
++            try:
++                import hashlib
++                metadata = decrypted/'Manifest.plist'
++                if metadata.is_symlink() or not metadata.is_file() or metadata.stat().st_size > 16*1024**2:
++                    raise ValueError('Decrypted backup metadata unavailable or oversized')
++                emitted = metadata.read_bytes()
++                metadata_info = plistlib.loads(emitted)
++                if not isinstance(metadata_info,dict) or not isinstance(metadata_info.get('IsEncrypted'),bool):
++                    raise ValueError('Decrypted backup encryption metadata invalid')
++                (output/'upstream-Manifest.plist').write_bytes(emitted)
++                original_flag = metadata_info['IsEncrypted']
++                metadata_info['IsEncrypted'] = False
++                derived = plistlib.dumps(metadata_info,fmt=plistlib.FMT_BINARY)
++                metadata.write_bytes(derived)
++                derived_plist = {'path':'decrypted/Manifest.plist','upstream_copy':'upstream-Manifest.plist',
++                                 'upstream_sha256':hashlib.sha256(emitted).hexdigest(),
++                                 'derived_sha256':hashlib.sha256(derived).hexdigest(),
++                                 'field':'IsEncrypted','before':original_flag,'after':False,
++                                 'reason':'Derived metadata after readable decrypted manifest and all manifested regular files verified present; source metadata unchanged.'}
++            except (OSError,ValueError,TypeError,OverflowError,plistlib.InvalidFileException):
++                failure = 'Decrypted backup metadata could not be safely marked as a derived unencrypted backup'
++                state = 'failed'
++        receipt = {'state':state,'max_backup_bytes':max_backup_bytes,'working_byte_limit':working_byte_limit,'input_files':before,'originals_unchanged':unchanged,
++                   'manifest_regular_files':len(expected),'missing_decrypted_files':missing,'logs_truncated':logs_truncated,
++                   'error':failure,'derived_manifest_plist':derived_plist,'limitation':'Completeness is relative to the supplied backup manifest; not device-wide. Decryption is not spyware clearance.'}
++        (output/'decryption-receipt.json').write_text(json.dumps(receipt,indent=2))
++        try:
++            retained = _retain_leapp_output(output,tc_id,name)
++        except (OSError, ValueError, RuntimeError):
++            return error('Decryption output could not be safely retained; temporary output was discarded','retention_failed')
++        result = {'state':state,'max_backup_bytes':max_backup_bytes,'working_byte_limit':working_byte_limit,'retained_output':str(retained),'decrypted_backup':str(retained/'decrypted'),
++                  'manifest_regular_files':len(expected),'missing_decrypted_files':len(missing),
++                  'originals_unchanged':unchanged,'logs_truncated':logs_truncated,'error':failure,'derived_manifest_plist':derived_plist,'limitation':receipt['limitation']}
++        extract_and_index(json.dumps(result),'mvt.decrypt',evidence_path,'mvt')
++        return {'status':'error' if state=='failed' else 'success','tool':name,'tool_call_id':tc_id,'params':params,'result':result}
+diff --git a/src/mulder/server/tools/phone.py b/src/mulder/server/tools/phone.py
+index 1864d6e..ffe4dc2 100644
+--- a/src/mulder/server/tools/phone.py
++++ b/src/mulder/server/tools/phone.py
+@@ -7,8 +7,12 @@ evidence and index results into the case database.
+ 
+ from __future__ import annotations
+ 
++from pydantic import StrictInt
++
+ import contextlib
++import csv
+ import functools
++import json
+ import logging
+ import mmap
+ import re as _re
+@@ -268,13 +272,36 @@ _ANDROID_ARTIFACTS: dict[str, dict[str, object]] = {
+ }
+ 
+ 
++@contextlib.contextmanager
++def _phone_sqlite_snapshot(db_path: Path):
++    """Read a stable supplied DB/WAL through a disposable working copy.
++
++    mode=ro can still create or modify SHM/WAL companions. Never open the
++    supplied SQLite file with an engine; rebuild SHM against the copied WAL.
++    This does not authenticate WAL pairing or snapshot a changing live source.
++    """
++    with tempfile.TemporaryDirectory(prefix="mulder_phone_sqlite_") as tmp:
++        working = Path(tmp) / "evidence.db"
++        shutil.copyfile(db_path, working)
++        wal = Path(str(db_path) + "-wal")
++        if wal.is_file():
++            shutil.copyfile(wal, Path(str(working) + "-wal"))
++        yield working
++
++
++@contextlib.contextmanager
++def _phone_sqlite_connection(db_path: Path):
++    with _phone_sqlite_snapshot(db_path) as working:
++        with contextlib.closing(sqlite3.connect(readonly_sqlite_uri(working), uri=True)) as conn:
++            yield conn
++
++
+ def _query_sqlite_safe(db_path: Path, query: str) -> list[str]:
+     """Run a read-only query, returning formatted rows or empty list on error."""
+     try:
+-        conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
+-        conn.row_factory = sqlite3.Row
+-        rows = conn.execute(query).fetchall()
+-        conn.close()
++        with _phone_sqlite_connection(db_path) as conn:
++            conn.row_factory = sqlite3.Row
++            rows = conn.execute(query).fetchall()
+     except sqlite3.Error:
+         return []
+ 
+@@ -296,6 +323,58 @@ def _find_databases(search_dir: Path, db_names: list[str]) -> list[Path]:
+     return found
+ 
+ 
++def _query_android_with_coverage(db_path: Path, query: str) -> tuple[list[str], dict[str, object]]:
++    """Preserve typed rows and explicitly disclose incomplete/error views.
++
++    Lawliet downstream change: remove the legacy silent SQL sample limit,
++    retain source row IDs for SMS, and bound memory at 100,000 rows per source.
++    This does not establish that a supplied WAL belongs to its database.
++    """
++    limit = 100_000
++    query = _re.sub(r"\s+LIMIT\s+\d+\s*$", "", query, flags=_re.I)
++    if query.startswith("SELECT address, body, date, type FROM sms"):
++        query = "SELECT rowid AS source_rowid, * FROM sms ORDER BY date DESC"
++    coverage: dict[str, object] = {"path": str(db_path), "query": query,
++                                   "row_limit": limit, "warnings": []}
++    warnings = coverage["warnings"]
++    assert isinstance(warnings, list)
++    try:
++        with db_path.open("rb") as evidence:
++            header = evidence.read(20)
++        if len(header) >= 20 and header[:16] == b"SQLite format 3\x00" and header[18:20] == b"\x02\x02":
++            wal = Path(str(db_path) + "-wal")
++            wal_present = wal.is_file()
++            wal_bytes = wal.stat().st_size if wal_present else None
++            coverage["wal"] = {"present": wal_present, "bytes": wal_bytes, "pairing": "unverified"}
++            if not wal_present or wal_bytes <= 32:
++                warnings.append("WAL companion absent or empty: only the checkpointed database view is available; completeness is unknown.")
++            else:
++                warnings.append("WAL companion present: SQLite's readable view does not independently establish DB/WAL pairing; completeness is limited pending provenance verification.")
++        with _phone_sqlite_connection(db_path) as conn:
++            conn.row_factory = sqlite3.Row
++            rows = conn.execute(query).fetchmany(limit + 1)
++        truncated = len(rows) > limit
++        if truncated:
++            rows = rows[:limit]
++            warnings.append("Row limit reached: additional rows exist and were not indexed.")
++        coverage.update({"state": "limited" if warnings else ("parsed" if rows else "empty"),
++                         "rows_returned": len(rows), "truncated": truncated})
++        lines = [json.dumps(dict(row), ensure_ascii=False,
++                            default=lambda value: {"sqlite_blob_hex": value.hex()}
++                            if isinstance(value, bytes) else str(value)) for row in rows]
++        return lines, coverage
++    except sqlite3.Error as exc:
++        code = (getattr(exc, "sqlite_errorcode", 0) or 0) & 0xff
++        state = "corrupt" if code in (sqlite3.SQLITE_CORRUPT, sqlite3.SQLITE_NOTADB) else "query_failed"
++        if "no such table" in str(exc).lower() or "no such column" in str(exc).lower():
++            state = "unsupported_schema"
++        coverage.update({"state": state, "error": str(exc), "rows_returned": 0})
++        return [], coverage
++    except OSError as exc:
++        coverage.update({"state": "inaccessible", "error": str(exc), "rows_returned": 0})
++        return [], coverage
++
++
+ @mcp.tool()
+ @tool_access(Role.EXTRACT_EXECUTOR)
+ def parse_android_artifacts(
+@@ -364,11 +443,13 @@ def parse_android_artifacts(
+     try:
+         all_results: list[str] = []
+         parsed_types: list[str] = []
++        coverage: list[dict[str, object]] = []
+ 
+         for atype in types_to_parse:
+             spec = _ANDROID_ARTIFACTS[atype]
+             query = spec["query"]
+             if query is None:
++                coverage.append({"artifact_type": atype, "state": "unsupported"})
+                 continue
+ 
+             db_files: list[Path] = []
+@@ -380,15 +461,22 @@ def parse_android_artifacts(
+                 assert isinstance(db_names, list)
+                 db_files = _find_databases(search_dir, db_names)
+ 
++            if not db_files:
++                coverage.append({"artifact_type": atype, "state": "absent"})
++
+             for db_path in db_files:
+-                lines = _query_sqlite_safe(db_path, str(query))
++                lines, item = _query_android_with_coverage(db_path, str(query))
++                item["artifact_type"] = atype
++                coverage.append(item)
+                 if lines:
+                     header = f"=== {spec['label']} ({db_path.name}) ==="
+                     all_results.append(header + "\n" + "\n".join(lines))
+                     if atype not in parsed_types:
+                         parsed_types.append(atype)
+ 
+-        combined = "\n\n".join(all_results) if all_results else ""
++        # Index coverage even when nothing can be parsed, so error/limited states
++        # survive context compaction, retrieval, and later report generation.
++        combined = "ANDROID SOURCE COVERAGE\n" + json.dumps(coverage, ensure_ascii=False) + "\n\n" + "\n\n".join(all_results)
+         if combined:
+             index_result = extract_and_index(
+                 combined,
+@@ -397,6 +485,7 @@ def parse_android_artifacts(
+                 "android_parser",
+             )
+             index_result["parsed_types"] = parsed_types
++            index_result["coverage"] = coverage
+         else:
+             index_result = {
+                 "status": "no_results",
+@@ -423,100 +512,84 @@ _IOS_MANIFEST_ARTIFACTS: dict[str, dict[str, object]] = {
+     "sms": {
+         "file_id": "3d0d7e5fb2ce288813306e4d4636395e047a3d28",
+         "db_name": "sms.db",
+-        "query": (
+-            "SELECT text, datetime(date + 978307200, 'unixepoch') as timestamp, "
+-            "handle.id as contact "
+-            "FROM message LEFT JOIN handle ON message.handle_id = handle.ROWID "
+-            "ORDER BY date DESC LIMIT 1000"
+-        ),
++        "query": "SELECT m.rowid AS source_rowid, m.*, handle.id AS contact FROM message AS m LEFT JOIN handle ON m.handle_id=handle.ROWID ORDER BY m.date DESC",
+         "label": "SMS/iMessage",
+     },
+     "calls": {
+         "file_id": "2b2b0084a1bc3a5ac8c27afdf14afb42c61a19ca",
+         "db_name": "call_history.db",
+-        "query": "SELECT address, duration, date, flags FROM call ORDER BY date DESC LIMIT 1000",
++        "query": "SELECT rowid AS source_rowid, * FROM call ORDER BY date DESC",
+         "label": "Call History",
+     },
+     "contacts": {
+         "file_id": "31bb7ba8914766d4ba40d6dfb6113c8b614be442",
+         "db_name": "AddressBook.sqlitedb",
+         "query": (
+-            "SELECT c0First, c1Last, c16Phone FROM ABPersonFullTextSearch_content LIMIT 1000"
++            "SELECT rowid AS source_rowid, * FROM ABPersonFullTextSearch_content"
+         ),
+         "label": "Contacts",
+     },
+     "safari": {
+         "file_id": "e74113c185fd8297e140571b60c618c6b47da205",
+         "db_name": "History.db",
+-        "query": (
+-            "SELECT hi.url, hv.title, "
+-            "datetime(hv.visit_time + 978307200, 'unixepoch') as visit_time "
+-            "FROM history_items hi JOIN history_visits hv ON hi.id = hv.history_item "
+-            "ORDER BY hv.visit_time DESC LIMIT 500"
+-        ),
++        "query": "SELECT hv.rowid AS source_rowid, hv.*, hi.url AS url FROM history_visits hv LEFT JOIN history_items hi ON hi.id=hv.history_item ORDER BY hv.visit_time DESC",
+         "label": "Safari History",
+     },
+     "notes": {
+         "file_id": None,
+         "db_name": "NoteStore.sqlite",
+-        "query": "SELECT ZTITLE, ZBODY FROM ZSFNOTE LIMIT 500",
++        "query": "SELECT rowid AS source_rowid, * FROM ZSFNOTE",
+         "label": "Notes",
+     },
+     "locations": {
+         "file_id": None,
+         "db_name": "consolidated.db",
+-        "query": (
+-            "SELECT Latitude, Longitude, Timestamp, HorizontalAccuracy "
+-            "FROM CellLocation ORDER BY Timestamp DESC LIMIT 500"
+-        ),
++        "query": "SELECT rowid AS source_rowid, * FROM CellLocation ORDER BY Timestamp DESC",
+         "label": "Location Data",
+     },
+     "voicemail": {
+         "file_id": None,
+         "db_name": "voicemail.db",
+-        "query": "SELECT sender, date, duration FROM voicemail ORDER BY date DESC LIMIT 500",
++        "query": "SELECT rowid AS source_rowid, * FROM voicemail ORDER BY date DESC",
+         "label": "Voicemail",
+     },
+     "knowledgec": {
+         "file_id": None,
+         "db_name": "knowledgeC.db",
+-        "query": (
+-            "SELECT ZOBJECT.ZSTREAMNAME, ZOBJECT.ZVALUESTRING, "
+-            "datetime(ZOBJECT.ZCREATIONDATE + 978307200, 'unixepoch') as created "
+-            "FROM ZOBJECT WHERE ZOBJECT.ZSTREAMNAME IS NOT NULL "
+-            "ORDER BY ZOBJECT.ZCREATIONDATE DESC LIMIT 500"
+-        ),
++        "query": "SELECT rowid AS source_rowid, * FROM ZOBJECT WHERE ZSTREAMNAME IS NOT NULL ORDER BY ZCREATIONDATE DESC",
+         "label": "KnowledgeC Activity",
+     },
+ }
+ 
+ 
+-def _resolve_ios_manifest(backup_dir: Path) -> dict[str, Path]:
+-    """Parse Manifest.db to map file IDs to actual paths on disk.
+-
+-    iTunes/Finder backups store files named by their SHA1 hash in
+-    two-character subdirectories (e.g. ``3d/3d0d7e5f...``).
+-    """
++def _resolve_ios_manifest(backup_dir: Path, coverage: list | None = None) -> dict[str, Path]:
++    """Resolve regular hashed payloads and same-domain/path WAL companions."""
+     manifest = backup_dir / "Manifest.db"
+     if not manifest.exists():
+         return {}
+-
++    lines, state = _query_android_with_coverage(manifest, "SELECT fileID, relativePath, domain FROM Files")
++    state["artifact_type"] = "manifest_inventory"
++    if coverage is not None:
++        coverage.append(state)
++    rows = [json.loads(line) for line in lines]
+     mapping: dict[str, Path] = {}
+-    try:
+-        conn = sqlite3.connect(readonly_sqlite_uri(manifest), uri=True)
+-        rows = conn.execute("SELECT fileID, relativePath, domain FROM Files").fetchall()
+-        conn.close()
+-    except sqlite3.Error:
+-        return {}
+-
+-    for file_id, _rel_path, _domain in rows:
+-        candidate = backup_dir / file_id[:2] / file_id
+-        if candidate.exists():
+-            mapping[file_id] = candidate
+-        flat_candidate = backup_dir / file_id
+-        if flat_candidate.exists():
+-            mapping[file_id] = flat_candidate
+-
++    by_logical: dict[tuple[str, str], str] = {}
++    for row in rows:
++        file_id = row['fileID']
++        # Manifest values are untrusted paths, not permission to escape backup.
++        if not isinstance(file_id, str) or not file_id or any(c not in '0123456789abcdefABCDEF' for c in file_id):
++            continue
++        for candidate in (backup_dir / file_id[:2] / file_id, backup_dir / file_id):
++            if candidate.is_file() and not candidate.is_symlink() and candidate.resolve().is_relative_to(backup_dir.resolve()):
++                mapping[file_id] = candidate
++        by_logical[(str(row['domain']), str(row['relativePath']))] = file_id
++    for row in rows:
++        file_id = row['fileID']
++        if file_id not in mapping:
++            continue
++        wal_id = by_logical.get((str(row['domain']), str(row['relativePath']) + '-wal'))
++        if wal_id in mapping:
++            mapping[file_id + '-wal'] = mapping[wal_id]
+     return mapping
+ 
+ 
+@@ -528,9 +601,12 @@ def parse_ios_artifacts(
+ ) -> dict[str, object]:
+     """Parse iOS artifacts from an iTunes/Finder backup or extracted files.
+ 
+-    Supports iTunes backup format (with Manifest.db mapping SHA1 file
+-    names to real paths) and directories containing extracted iOS
+-    databases directly.
++    Supports iTunes backup format (with Manifest.db mapping hashed files
++    and same-domain WAL companions) and directories of extracted databases.
++    Returns typed raw fields and explicit per-source coverage, capped at
++    100,000 rows per database with truncation disclosure. Raw time values
++    are not normalized: epoch/unit/timezone require schema-specific review.
++    A readable WAL does not authenticate its pairing with the database.
+ 
+     Known artifact types: sms, calls, contacts, safari, notes,
+     locations, voicemail, knowledgec.
+@@ -566,54 +642,44 @@ def parse_ios_artifacts(
+             error_type="invalid_argument",
+         )
+ 
+-    manifest_map = _resolve_ios_manifest(target)
+-    has_manifest = bool(manifest_map)
+-
++    coverage: list[dict[str, object]] = []
++    manifest_map = _resolve_ios_manifest(target, coverage)
++    has_manifest = (target / 'Manifest.db').is_file()
+     all_results: list[str] = []
+     parsed_types: list[str] = []
+-
+     with tempfile.TemporaryDirectory(prefix="mulder_ios_") as tmpdir:
+         for atype in types_to_parse:
+             spec = _IOS_MANIFEST_ARTIFACTS[atype]
+-
+-            db_path: Path | None = None
+-            file_id = str(spec["file_id"]) if spec["file_id"] else None
+-            db_name = str(spec["db_name"])
+-            if has_manifest and file_id and file_id in manifest_map:
++            file_id = str(spec['file_id']) if spec['file_id'] else None
++            db_name = str(spec['db_name'])
++            candidates = []
++            if file_id and file_id in manifest_map:
+                 src = manifest_map[file_id]
+-                db_path = Path(tmpdir) / f"{atype}_{db_name}"
+-                shutil.copy2(str(src), str(db_path))
++                work = Path(tmpdir) / f'{atype}_{db_name}'
++                shutil.copyfile(src, work)
++                wal = manifest_map.get(file_id + '-wal')
++                if wal:
++                    shutil.copyfile(wal, Path(str(work) + '-wal'))
++                candidates.append((src, work))
+             else:
+-                candidates = list(target.rglob(db_name))
+-                if candidates:
+-                    db_path = candidates[0]
+-
+-            if db_path is None or not db_path.exists():
+-                continue
+-
+-            lines = _query_sqlite_safe(db_path, str(spec["query"]))
+-            if lines:
+-                header = f"=== {spec['label']} ({spec['db_name']}) ==="
+-                all_results.append(header + "\n" + "\n".join(lines))
+-                parsed_types.append(atype)
+-
+-    combined = "\n\n".join(all_results) if all_results else ""
+-    if combined:
+-        index_result = extract_and_index(
+-            combined,
+-            "phone.ios",
+-            evidence_path,
+-            "ios_parser",
+-        )
+-        index_result["parsed_types"] = parsed_types
+-        index_result["manifest_found"] = has_manifest
+-    else:
+-        index_result = {
+-            "status": "no_results",
+-            "message": "No iOS artifacts found",
+-            "searched_types": types_to_parse,
+-            "manifest_found": has_manifest,
+-        }
++                candidates = [(candidate, candidate) for candidate in target.rglob(db_name) if candidate.is_file()]
++            if not candidates:
++                coverage.append({'artifact_type': atype, 'state': 'absent',
++                                 'reason': 'No recognized supplied payload; absence is not device completeness.'})
++            for source, working in candidates:
++                lines, item = _query_android_with_coverage(working, str(spec['query']))
++                item['path'] = str(source)
++                item['artifact_type'] = atype
++                item['timestamp_scope'] = 'Raw SQLite values only; timestamp unit/epoch/timezone not normalized or inferred.'
++                coverage.append(item)
++                if lines:
++                    all_results.append(f"=== {spec['label']} ({source.name}) ===\n" + '\n'.join(lines))
++                    if atype not in parsed_types:
++                        parsed_types.append(atype)
++    combined = 'IOS SOURCE COVERAGE\n' + json.dumps(coverage, ensure_ascii=False) + '\n\n' + '\n\n'.join(all_results)
++    index_result = extract_and_index(combined, 'phone.ios', evidence_path, 'ios_parser_raw/2')
++    index_result.update(parsed_types=parsed_types, manifest_found=has_manifest, coverage=coverage,
++                        timestamp_scope='Raw values only; use a validated native parser for schema-specific UTC normalization.')
+ 
+     elapsed = (time.monotonic() - t0) * 1000
+     return tool_response(
+@@ -661,6 +727,11 @@ def _parse_shared_prefs(app_dir: Path) -> list[str]:
+ 
+ 
+ def _try_sqlcipher(db_path: Path, passwords: list[str]) -> list[str] | None:
++    with _phone_sqlite_snapshot(db_path) as working:
++        return _try_sqlcipher_working(working, passwords)
++
++
++def _try_sqlcipher_working(db_path: Path, passwords: list[str]) -> list[str] | None:
+     """Attempt to open an encrypted SQLite DB with SQLCipher.
+ 
+     Returns table listing + sample data if successful, None otherwise.
+@@ -793,23 +864,21 @@ def decrypt_app_data(
+ 
+     for db_path in sqlite_files:
+         try:
+-            conn = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
+-            tables = [
+-                r[0]
+-                for r in conn.execute(
+-                    "SELECT name FROM sqlite_master WHERE type='table'"
+-                ).fetchall()
+-            ]
+-            conn.close()
++            with _phone_sqlite_connection(db_path) as conn:
++                tables = [
++                    r[0]
++                    for r in conn.execute(
++                        "SELECT name FROM sqlite_master WHERE type='table'"
++                    ).fetchall()
++                ]
+             if tables:
+                 lines = [f"=== Plaintext DB: {db_path.name} ==="]
+                 lines.append(f"Tables: {', '.join(tables)}")
+                 for table in tables[:5]:
+                     try:
+-                        c2 = sqlite3.connect(readonly_sqlite_uri(db_path), uri=True)
+-                        c2.row_factory = sqlite3.Row
+-                        rows = c2.execute(f"SELECT * FROM [{table}] LIMIT 10").fetchall()
+-                        c2.close()
++                        with _phone_sqlite_connection(db_path) as c2:
++                            c2.row_factory = sqlite3.Row
++                            rows = c2.execute(f"SELECT * FROM [{table}] LIMIT 10").fetchall()
+                         if rows:
+                             cols = rows[0].keys()
+                             lines.append(f"\n--- {table} ---")
+@@ -985,61 +1054,63 @@ def _classify_artifact_category(artifact_type: str) -> str:
+ _MAX_LEAPP_RESPONSE_ROWS = 100
+ 
+ 
+-def _leapp_artifact_lines(artifact: Mapping[str, Any]) -> list[str]:
+-    """Render one parsed LEAPP artifact as indexable text.
+-
+-    ``_parse_tsv_file`` zips headers to values non-strictly, so a truncated row
+-    yields a short dict. Taking the union of keys in first-seen order keeps
+-    every row on the same columns instead of letting one short row shift the
+-    whole artifact.
++def _retain_leapp_output(output_dir: Path, tc_id: str, tool_name: str) -> Path:
++    """Keep exact parser derivatives and a hashed inventory in the active case."""
++    import hashlib
++    files = list(output_dir.rglob('*'))
++    if any(p.is_symlink() for p in files):
++        raise ValueError('Parser output contains a symlink; retention refused')
++    regular = [p for p in files if p.is_file()]
++    if len(regular) > 100_000 or sum(p.stat().st_size for p in regular) > 5*1024**3:
++        raise ValueError('Parser derivatives exceed retention ceiling (100000 files / 5 GiB)')
++    retained = Path(get_ctx().db.db_path).parent / 'retained-tools' / (tool_name+'-'+tc_id)
++    retained.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
++    shutil.copytree(output_dir, retained)
++    manifest = []
++    for path in regular:
++        relative = path.relative_to(output_dir)
++        digest = hashlib.sha256()
++        with (retained/relative).open('rb') as handle:
++            while chunk := handle.read(1024**2):
++                digest.update(chunk)
++        manifest.append({'path': str(relative), 'bytes': path.stat().st_size, 'sha256': digest.hexdigest()})
++    (retained/'mulder-retention-manifest.json').write_text(json.dumps({'tool': tool_name, 'tool_call_id': tc_id, 'files': manifest}, indent=2))
++    return retained
+ 
+-    Args:
+-        artifact: One entry from ``_parse_leapp_output``'s ``artifacts`` list.
+ 
+-    Returns:
+-        Lines of tab-separated text, empty if the artifact has no rows.
+-    """
++def _leapp_artifact_lines(artifact: Mapping[str, Any]) -> list[str]:
++    """Index JSON rows without splitting multiline/quoted TSV field values."""
+     rows = artifact.get("data") or []
+     if not rows:
+         return []
+-
+-    columns: dict[str, None] = {}
+-    for row in rows:
+-        for key in row:
+-            columns.setdefault(key, None)
+-    headers = list(columns)
+-
+     lines = [f"[{artifact.get('category', '')}] {artifact.get('artifact_type', '')}"]
+-    lines.append("\t".join(headers))
+-    lines.extend("\t".join(str(row.get(h, "")) for h in headers) for row in rows)
++    lines.extend(json.dumps(row, ensure_ascii=False) for row in rows)
+     return lines
+ 
+ 
+ def _parse_tsv_file(tsv_path: Path) -> list[dict[str, str]]:
+-    """Parse a TSV file into a list of row dicts.
+-
+-    Args:
+-        tsv_path: Path to the TSV file.
++    """Read LEAPP's csv.writer TSV dialect, retaining exact Unicode values.
+ 
+-    Returns:
+-        List of dicts mapping column headers to values.
++    Malformed encoding, duplicate headers and uneven rows fail explicitly;
++    replacement decoding or zip truncation would silently alter evidence.
+     """
+-    try:
+-        lines = tsv_path.read_text(encoding="utf-8", errors="replace").splitlines()
+-    except OSError:
+-        return []
+-
+-    if len(lines) < 2:
+-        return []
+-
+-    headers = lines[0].split("\t")
+-    records: list[dict[str, str]] = []
+-    for line in lines[1:]:
+-        values = line.split("\t")
+-        row = dict(zip(headers, values, strict=False))
+-        records.append(row)
+-
+-    return records
++    # LEAPP browser local-storage reports may contain legitimate large fields.
++    # Retain them exactly with a deliberate ceiling, rather than csv's 128 KiB
++    # default or an unbounded parser. Tool concurrency is constrained upstream.
++    csv.field_size_limit(8 * 1024 * 1024)
++    with tsv_path.open("r", encoding="utf-8-sig", newline="") as stream:
++        reader = csv.reader(stream, delimiter="\t", strict=True)
++        headers = next(reader, None)
++        if headers is None:
++            return []
++        if not headers or len(set(headers)) != len(headers):
++            raise ValueError(f"Invalid or duplicate TSV headers: {tsv_path}")
++        records = []
++        for values in reader:
++            if len(values) != len(headers):
++                raise ValueError(f"TSV column count mismatch at physical line {reader.line_num}: {tsv_path}")
++            records.append(dict(zip(headers, values, strict=True)))
++        return records
+ 
+ 
+ _LEAPP_TSV_DIRNAME = "_TSV Exports"
+@@ -1249,7 +1320,7 @@ def run_aleapp(
+                 check=False,
+             )
+         except subprocess.TimeoutExpired:
+-            result = _parse_leapp_output(output_dir, "android", extraction_path, artifact_filter)
++            result = _parse_leapp_output(_retain_leapp_output(output_dir, tc_id, "aleapp"), "android", extraction_path, artifact_filter)
+             if result["total_artifacts_parsed"] > 0:
+                 result["timed_out"] = True
+                 text = f"ALEAPP (partial, timed out): {result['total_artifacts_parsed']} artifacts"
+@@ -1275,7 +1346,7 @@ def run_aleapp(
+                 error_type="os_error",
+             )
+ 
+-        result = _parse_leapp_output(output_dir, "android", extraction_path, artifact_filter)
++        result = _parse_leapp_output(_retain_leapp_output(output_dir, tc_id, "aleapp"), "android", extraction_path, artifact_filter)
+ 
+         if result["total_artifacts_parsed"] == 0:
+             elapsed = (time.monotonic() - t0) * 1000
+@@ -1292,6 +1363,7 @@ def run_aleapp(
+             f"ALEAPP analysis of {extraction_path}",
+             f"Artifacts parsed: {result['total_artifacts_parsed']}",
+             f"Total records: {result['total_records']}",
++            "Retained TSV sources: " + json.dumps([a["source_files"] for a in result["artifacts"]]),
+         ]
+         for cat, count in result.get("categories", {}).items():
+             text_parts.append(f"  {cat}: {count} records")
+@@ -1418,7 +1490,7 @@ def run_ileapp(
+                 check=False,
+             )
+         except subprocess.TimeoutExpired:
+-            result = _parse_leapp_output(output_dir, "ios", extraction_path, artifact_filter)
++            result = _parse_leapp_output(_retain_leapp_output(output_dir, tc_id, "ileapp"), "ios", extraction_path, artifact_filter)
+             if result["total_artifacts_parsed"] > 0:
+                 result["timed_out"] = True
+                 text = f"iLEAPP (partial, timed out): {result['total_artifacts_parsed']} artifacts"
+@@ -1444,7 +1516,7 @@ def run_ileapp(
+                 error_type="os_error",
+             )
+ 
+-        result = _parse_leapp_output(output_dir, "ios", extraction_path, artifact_filter)
++        result = _parse_leapp_output(_retain_leapp_output(output_dir, tc_id, "ileapp"), "ios", extraction_path, artifact_filter)
+ 
+         if result["total_artifacts_parsed"] == 0:
+             elapsed = (time.monotonic() - t0) * 1000
+@@ -1461,6 +1533,7 @@ def run_ileapp(
+             f"iLEAPP analysis of {extraction_path}",
+             f"Artifacts parsed: {result['total_artifacts_parsed']}",
+             f"Total records: {result['total_records']}",
++            "Retained TSV sources: " + json.dumps([a["source_files"] for a in result["artifacts"]]),
+         ]
+         for cat, count in result.get("categories", {}).items():
+             text_parts.append(f"  {cat}: {count} records")
+@@ -1483,3 +1556,329 @@ def run_ileapp(
+ 
+     elapsed = (time.monotonic() - t0) * 1000
+     return tool_response(tc_id, "run_ileapp", params, summary, "phone.ileapp", elapsed)
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def run_ancalor_export_review(
++    evidence_path: str,
++    date_order: str = "mdy",
++    timezone_name: str | None = None,
++    year_century: int | None = None,
++) -> dict[str, object]:
++    """Parse a supplied WhatsApp export, vCard or local image through Lawliet.
++
++    Downstream candidate adapter. Preserves a hashed copy and an Lawliet case
++    below the active Mulder case directory, plus JSONL and HTML derivatives.
++    Text exports are editable representations, not authenticated acquisition.
++    Two-digit years require declared century; ambiguous/unknown zones stay undated. No recovery,
++    identity attribution, network access, model execution or media fetching.
++    Other inputs are explicitly unsupported. Images are signature-indexed; use run_exiftool for metadata.
++
++    Args:
++        evidence_path: One .txt WhatsApp export, .vcf contact file, or local JPEG/PNG.
++        date_order: Explicit date component order: mdy, dmy or ymd.
++        timezone_name: Optional operator-declared IANA zone; never inferred.
++        year_century: Optional declared century for two-digit years, e.g. 2000.
++    """
++    from lawliet_mobile.core import create_case, connect, import_evidence, select_artifacts, verify
++    from lawliet_mobile.messages import import_chat
++    from lawliet_mobile.parsers import native_analyze
++    from lawliet_mobile.report import write_export, write_report
++
++    tc_id = make_tool_call_id()
++    t0 = time.monotonic()
++    params = {"evidence_path": evidence_path, "date_order": date_order, "timezone_name": timezone_name, "year_century": year_century}
++    path = Path(evidence_path)
++    if not path.is_file() or path.is_symlink():
++        return error_response(tc_id, "run_ancalor_export_review", params,
++                              "A regular supplied file is required", error_type="invalid_input")
++    if path.suffix.lower() not in {".txt", ".vcf", ".jpg", ".jpeg", ".png"}:
++        return tool_response(tc_id, "run_ancalor_export_review", params,
++                             {"state": "unsupported", "records": 0, "reason": "This adapter supports WhatsApp TXT, vCard, JPEG and PNG signatures only."},
++                             "phone.lawliet_export", (time.monotonic()-t0)*1000)
++    if path.stat().st_size > 64*1024**2:
++        return error_response(tc_id, "run_ancalor_export_review", params,
++                              "Input exceeds the 64 MiB accepted file ceiling", error_type="input_limit")
++    workspace = Path(get_ctx().db.db_path).parent / "lawliet-review"
++    case_id = "EXPORT-" + str(tc_id).replace("_", "-")
++    create_case(workspace, case_id, examiner="Codex/Mulder candidate adapter")
++    with connect(workspace, case_id) as (root, db):
++        if path.suffix.lower() == ".txt":
++            result = import_chat(root, db, path, date_order, timezone_name, year_century=year_century)
++        else:
++            eid, _, _ = import_evidence(root, db, path, "unknown", expand_archives=False)
++            result = native_analyze(root, db, eid)
++        records = select_artifacts(db, limit=None)
++        output = root / "exports"
++        write_export(root, db, output / "records.jsonl", "jsonl", records)
++        write_report(root, db, output / "review.html")
++        integrity = verify(root, db)
++        retained = {"case_path": str(root), "jsonl": str(output/"records.jsonl"), "html": str(output/"review.html")}
++    lines = [json.dumps({"scope": "Supplied export only; no device acquisition, completeness or identity assurance", "retained": retained, "parser_result": result}, ensure_ascii=False)]
++    lines.extend(json.dumps(row, ensure_ascii=False) for row in records)
++    indexed = extract_and_index("\n".join(lines), "phone.lawliet_export", str(path), "lawliet-export-adapter/1")
++    indexed.update({"records": len(records), "record_count_unit": "Lawliet artifacts",
++                    "retained": retained, "originals_unchanged": integrity["ok"],
++                    "parser_result": result, "state": "parsed" if records else "limited"})
++    response = tool_response(tc_id, "run_ancalor_export_review", params, indexed,
++                             "phone.lawliet_export", (time.monotonic()-t0)*1000)
++    response["result"] = indexed
++    return response
++
++
++def _ancalor_review_case(case_path: str) -> Path:
++    if not isinstance(case_path, str) or not case_path:
++        raise ValueError('Select a retained Lawliet review case belonging to this active Mulder case')
++    root = Path(case_path).absolute()
++    allowed = (Path(get_ctx().db.db_path).parent / 'lawliet-review').absolute()
++    if (any(p.is_symlink() for p in (root, *root.parents)) or
++            root.resolve().parent != allowed.resolve() or
++            (root/'case.sqlite').is_symlink() or not (root/'case.sqlite').is_file()):
++        raise ValueError('Select a direct retained Lawliet review child of this active Mulder case; symlinks and other cases are refused')
++    return root
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def preview_ancalor_media(case_path: str, artifact_id: str) -> dict[str, object]:
++    """Make a hash-verified local media preview for an exact retained artifact.
++
++    No OCR or inferred capture truth. Returns local preview path, byte count,
++    MIME and SHA256 for visual examiner review; source evidence is unchanged.
++    """
++    from lawliet_mobile.core import connect
++    from lawliet_mobile.media import preview
++    root = _ancalor_review_case(case_path)
++    with connect(root.parent,root.name) as (_,db):
++        return preview(root,db,artifact_id)
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def parse_google_maps_foreground_location(case_path: str, file_id: int) -> dict[str, object]:
++    """Decode the tested Google Maps 9.77.5 last-foreground preference layout.
++
++    Hash-verified retained XML source, exact base64/protobuf bytes, provisional
++    E7 coordinates and separate app-use timestamp. Does not establish a visit,
++    coordinate observation time, accuracy or automatic venue attribution.
++    Other layouts fail explicitly. Independent device validation is pending.
++    """
++    from lawliet_mobile.core import connect
++    from lawliet_mobile.evidence_viewer import inspect_file
++    from lawliet_mobile.maps_foreground import decode_preferences
++    root = _ancalor_review_case(case_path)
++    with connect(root.parent,root.name) as (_,db):
++        source = inspect_file(root,db,file_id,0,65536,'utf-8')
++    if source['has_more'] or source['text']['error_count']:
++        raise ValueError('Use complete UTF8 preferences up to64KiB')
++    result = decode_preferences(source['text']['text'])
++    result.update(file_id=file_id,source_sha256=source['source_sha256'],logical_path=source['logical_path'])
++    summary = extract_and_index(json.dumps(result,ensure_ascii=False),'phone.maps_foreground',source['logical_path'],result['method'])
++    result.update(summary)
++    return result
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def list_ancalor_files(case_path: str, query: str = '', offset: int = 0,
++                       limit: int = 100) -> dict[str, object]:
++    """List retained evidence files and their recorded whole-file SHA256.
++
++    Literal Unicode path matching; returns file IDs for source inspection and
++    read-only SQLite queries. Inventory hashes are not independently
++    authenticated source identity. Does not execute evidence or a parser.
++    """
++    from lawliet_mobile.core import connect
++    root = _ancalor_review_case(case_path)
++    if not isinstance(query, str) or len(query) > 4096 or type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 1000:
++        raise ValueError('Use bounded literal query, nonnegative offset and limit 1–1000')
++    with connect(root.parent, root.name) as (_, db):
++        db.create_function('inventory_match', 1, lambda p: int(query.casefold() in str(p).casefold()), deterministic=True)
++        total = db.execute('SELECT COUNT(*) FROM files WHERE inventory_match(logical_path)', ()).fetchone()[0]
++        rows = [dict(r) for r in db.execute('SELECT id,evidence_id,path,logical_path,sha256,size FROM files WHERE inventory_match(logical_path) ORDER BY logical_path,id LIMIT ? OFFSET ?', (limit,offset))]
++    return {'case_path': str(root), 'files': rows, 'total': total, 'offset': offset,
++            'has_more': offset+len(rows)<total, 'hash_scope': 'Recorded SHA256 of whole retained file; reverify bytes before citation.'}
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def import_ancalor_chat_review(case_path: str, evidence_path: str,
++                               date_order: str, timezone_name: str | None = None,
++                               year_century: int | None = None) -> dict[str, object]:
++    """Retain a supplied WhatsApp TXT export in this active Mulder review case.
++
++    Uses the existing Lawliet parser and preserves each imported occurrence.
++    Date order and optional timezone/century are operator declarations, not
++    device metadata. Unknown or ambiguous times remain undated. Editable text
++    does not authenticate sender identity, completeness or attachment contents.
++    Existing exports are prior snapshots; query or generate a new report after
++    importing. No network access, media retrieval, examiner approval or release.
++    """
++    from lawliet_mobile.core import connect, audit, verify
++    from lawliet_mobile.messages import import_chat
++
++    root = _ancalor_review_case(case_path)
++    source = Path(evidence_path).expanduser().absolute()
++    if (any(p.is_symlink() for p in (source, *source.parents)) or
++            not source.is_file() or source.suffix.lower() != '.txt'):
++        raise ValueError('Choose one regular supplied WhatsApp TXT file; symlinks are refused')
++    if source.stat().st_size > 64 * 1024**2:
++        raise ValueError('Chat input exceeds the 64 MiB accepted file ceiling')
++    with connect(root.parent, root.name) as (_, db):
++        before = verify(root, db)
++        if not before['ok']:
++            raise ValueError('Existing review case integrity failed; chat import refused')
++        result = import_chat(root, db, source, date_order, timezone_name,
++                             year_century=year_century)
++        audit(db, 'mulder.chat_review.imported', {'import': result,
++                                                'existing_exports_refreshed': False})
++        integrity = verify(root, db)
++    return {'case_path': str(root), 'import': result, 'integrity': integrity,
++            'existing_exports_refreshed': False,
++            'scope': 'Supplied editable chat export; no acquisition, identity or attachment assurance.'}
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def import_ancalor_leapp_review(case_path: str, report_path: str) -> dict[str, object]:
++    """Import this Mulder runtime's retained LEAPP outputs into an existing review case.
++
++    Does not run ALEAPP/iLEAPP again. Retains original reports and normalizes
++    supported fields for Lawliet UI. Report hashes are not original DB hashes.
++    No independent examiner approval or release is performed.
++    """
++    from lawliet_mobile.core import connect, audit, verify
++    from lawliet_mobile.parsed_import import import_parsed
++    root = _ancalor_review_case(case_path)
++    report = Path(report_path).absolute()
++    allowed = (Path(get_ctx().db.db_path).parent/'retained-tools').resolve()
++    if any(p.is_symlink() for p in (report,*report.parents)) or not report.resolve().is_relative_to(allowed) or not report.is_dir():
++        raise ValueError('Choose a retained Mulder LEAPP report directory; symlinks and external locations refused')
++    with connect(root.parent,root.name) as (_,db):
++        result = import_parsed(root,db,report,'folder','Mulder-retained LEAPP output')
++        audit(db,'mulder.leapp_review.imported',{'report_path':str(report),'result':result,'extractor_rerun':False})
++        integrity = verify(root,db)
++    return {'case_path':str(root),'import':result,'integrity':integrity,
++            'scope':'Presentation import of preserved Mulder output, not another acquisition/analysis engine.'}
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def query_ancalor_review(case_path: str, query: str = '', since: str | None = None,
++                         until: str | None = None, category: str | None = None,
++                         app: str | None = None, conversation: str | None = None,
++                         participant: str | None = None, phone_query: str | None = None,
++                         offset: StrictInt = 0, limit: StrictInt = 1000) -> dict[str, object]:
++    """Search a retained Lawliet export case with literal Unicode matching.
++
++    Date bounds accept YYYY-MM-DD (UTC midnight) or timezone-aware ISO
++    timestamps with up to six fractional digits. Both bounds are inclusive and
++    normalized to UTC microseconds; empty, malformed and zone-unknown bounds
++    are rejected. Date constraints exclude undated records and never normalize
++    unknown source timestamps. Category/app/conversation use exact indexed values; participant
++    is a literal casefold substring in message metadata. phone_query matches
++    one 7–15-digit number using existing indexed phone-field normalization,
++    not contact identity inference. Combined filters are ANDed. Returns at
++    most 1000 records per page. offset must be 0–1000000 and limit 1–1000;
++    both require actual integers, not strings, floats or booleans. Ordering is
++    UTC then artifact ID, undated last, for an unchanged case. Pages use separate
++    database snapshots; restart at offset 0 if the case changes. No total count
++    or whole-source completeness is inferred.
++    """
++    from lawliet_mobile.core import connect, select_artifacts
++    if type(offset) is not int or not 0 <= offset <= 1000000:
++        raise ValueError('offset must be an integer between 0 and 1000000')
++    if type(limit) is not int or not 1 <= limit <= 1000:
++        raise ValueError('limit must be an integer between 1 and 1000')
++    from lawliet_mobile.parsers import timestamp
++    import re
++    requested_bounds = {'since': since, 'until': until}
++    def effective_bound(value, name):
++        if value is None:
++            return None
++        if (not isinstance(value, str) or not re.fullmatch(r'\d{4}-\d{2}-\d{2}(?:[Tt ].+)?', value)
++                or re.search(r'[.,]\d{7}', value)):
++            raise ValueError(name + ' must be YYYY-MM-DD or a timezone-aware ISO timestamp with at most six fractional digits')
++        normalized = timestamp(value + 'T00:00:00Z' if len(value) == 10 else value)
++        if normalized is None:
++            raise ValueError(name + ' must be YYYY-MM-DD or a timezone-aware ISO timestamp')
++        return normalized
++    since = effective_bound(since, 'since')
++    until = effective_bound(until, 'until')
++    root = _ancalor_review_case(case_path)
++    with connect(root.parent, root.name) as (_, db):
++        rows = select_artifacts(db, query=query, since=since, until=until, category=category,
++                                app=app, conversation=conversation, participant=participant,
++                                phone_query=phone_query, limit=limit+1, offset=offset)
++    return {'query': query, 'since': since, 'until': until,
++            'requested_bounds': requested_bounds,
++            'category': category, 'app': app, 'conversation': conversation,
++            'participant': participant, 'phone_query': phone_query, 'records': rows[:limit],
++            'returned_records': min(len(rows),limit), 'truncated': offset > 0 or len(rows) > limit,
++            'offset': offset, 'limit': limit, 'has_more': len(rows) > limit,
++            'next_offset': offset+limit if len(rows) > limit and offset+limit <= 1000000 else None,
++            'pagination_limit_reached': len(rows) > limit and offset+limit > 1000000,
++            'window_scope': 'Returned matching indexed-record window only; earlier rows may be omitted when offset > 0. Total not computed; no source completeness claim. Pages are stable only while the case is unchanged.',
++            'undated_behavior': 'Date constraints exclude records without known UTC time'}
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def save_ancalor_finding(case_path: str, artifact_id: str, note: str) -> dict[str, object]:
++    """Save an examiner interpretation tied to an exact retained source record.
++
++    Notes are examiner claims, never original evidence. Writes checksum/audit
++    protected findings and readable/JSONL exports in this retained review case.
++    """
++    from lawliet_mobile.core import connect
++    from lawliet_mobile.findings import add_finding, export_findings
++    root = _ancalor_review_case(case_path)
++    with connect(root.parent, root.name) as (_, db):
++        result = add_finding(db, artifact_id, note, examiner='Codex/Mulder technical validation')
++        export_findings(root, db, root/('exports/findings-'+result['id']+'.jsonl'), 'jsonl')
++        export_findings(root, db, root/('exports/findings-'+result['id']+'.txt'), 'text')
++    return {'finding': result, 'exports': str(root/'exports'), 'independent_review': 'pending'}
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def run_ancalor_native_review(evidence_path: str, platform: str = 'auto', max_input_bytes: int = 2 * 1024**3) -> dict[str, object]:
++    """Preserve and parse a supplied native extraction through local Lawliet.
++
++    Downstream candidate adapter. Uses Lawliet's explicit native schema parsers,
++    retaining their coverage/warnings. No model execution, archive expansion,
++    deleted-data recovery or media fetch. max_input_bytes must be exactly
++    2147483648 (2 GiB default) or 3221225472 (3 GiB); at most100000 files.
++    Zero artifacts does not establish an empty device.
++    """
++    from lawliet_mobile.core import create_case, connect, import_evidence, select_artifacts, verify
++    from lawliet_mobile.parsers import native_analyze
++    from lawliet_mobile.report import write_export, write_report
++    tc_id = make_tool_call_id();t0 = time.monotonic();params={'evidence_path':evidence_path, 'platform':platform, 'max_input_bytes':max_input_bytes}
++    if type(max_input_bytes) is not int or max_input_bytes not in {2*1024**3, 3*1024**3}:
++        return error_response(tc_id,'run_ancalor_native_review',params,
++                              'max_input_bytes must be exactly 2147483648 (2 GiB) or 3221225472 (3 GiB).',error_type='invalid_input')
++    if platform not in {'auto', 'android', 'ios'}:
++        return error_response(tc_id,'run_ancalor_native_review',params,
++                              'Platform must be auto, android or ios',error_type='invalid_input')
++    path = Path(evidence_path)
++    if path.is_symlink() or not path.exists():
++        return error_response(tc_id,'run_ancalor_native_review',params,'Regular file/directory required',error_type='invalid_input')
++    workspace = Path(get_ctx().db.db_path).parent/'lawliet-review';case_id='NATIVE-'+str(tc_id).replace('_','-')
++    create_case(workspace,case_id,examiner='Codex/Mulder native candidate adapter')
++    with connect(workspace,case_id) as (root,db):
++        eid,files,size = import_evidence(root,db,path,platform,max_bytes=max_input_bytes,max_files=100000,expand_archives=False)
++        result = native_analyze(root,db,eid)
++        rows = select_artifacts(db,limit=None)
++        write_export(root,db,root/'exports/records.jsonl','jsonl',rows)
++        write_report(root,db,root/'exports/review.html')
++        integrity = verify(root,db)
++    retained={'case_path':str(root),'jsonl':str(root/'exports/records.jsonl'),'html':str(root/'exports/review.html')}
++    header={'scope':'Selected supplied native files only; no completeness/recovery/identity assurance','retained':retained,'parser_result':result,'received_files':files,'received_bytes':size,'platform':platform,'max_input_bytes':max_input_bytes}
++    indexed=extract_and_index('\n'.join([json.dumps(header,ensure_ascii=False)]+[json.dumps(r,ensure_ascii=False) for r in rows]),'phone.lawliet_native',str(path),'lawliet-native-adapter/2')
++    indexed.update(header);indexed.update(records=len(rows),record_count_unit='Lawliet artifacts',originals_unchanged=integrity['ok'])
++    response=tool_response(tc_id,'run_ancalor_native_review',params,indexed,'phone.lawliet_native',(time.monotonic()-t0)*1000);response['result']=indexed;return response
++
++# Register the optional, bounded supplied-SQLite recovery adapter.
++from mulder.server.tools import lawliet_recovery as _ancalor_recovery  # noqa: E402,F401
+diff --git a/src/mulder/server/tools/yara.py b/src/mulder/server/tools/yara.py
+index 3244243..5b0fdd2 100644
+--- a/src/mulder/server/tools/yara.py
++++ b/src/mulder/server/tools/yara.py
+@@ -19,7 +19,7 @@ import time
+ from pathlib import Path
+ from typing import Any
+ 
+-from mulder.assets.paths import asset_path, register_cache_clear
++from mulder.assets.paths import asset_path
+ from mulder.server.app import get_ctx, mcp
+ from mulder.server.extract_helpers import extract_and_index
+ from mulder.server.helpers import (
+@@ -34,28 +34,11 @@ logger = logging.getLogger(__name__)
+ 
+ _SIGNATURE_BASE_DIRNAME = "signature-base"
+ 
+-_rules_updated = False
+-_rules_lock = threading.Lock()
+-
+-
+ def _signature_base_dir() -> Path | None:
+-    """The Neo23x0/signature-base clone, or None if it is not installed."""
++    """The pinned local signature-base clone, or None if it is not installed."""
+     return asset_path(_SIGNATURE_BASE_DIRNAME)
+ 
+ 
+-def _reset_rules_updated() -> None:
+-    """Re-arm the one-shot rule update after the asset root moves.
+-
+-    A ``mulder setup`` run that *creates* signature-base must be allowed to
+-    pull, even if a previous lookup in the same process already gave up.
+-    """
+-    global _rules_updated  # noqa: PLW0603
+-    with _rules_lock:
+-        _rules_updated = False
+-
+-
+-register_cache_clear(_reset_rules_updated)
+-
+ _SRC_FILE_SCAN = "yara.file_scan"
+ _SRC_MEMORY_SCAN = "yara.memory_scan"
+ _SRC_VOL_SCAN = "yara.volatility_scan"
+@@ -69,53 +52,6 @@ _YARA_MATCH_RE = re.compile(r"^(\S+)\s+(.+)$")
+ _YARA_STRING_RE = re.compile(r"^(0x[0-9a-fA-F]+):(\S+):\s*(.*)$")
+ 
+ 
+-def _update_community_rules() -> None:
+-    """Pull latest YARA rules from signature-base (best-effort, once per session)."""
+-    global _rules_updated  # noqa: PLW0603
+-    with _rules_lock:
+-        if _rules_updated:
+-            return
+-        _rules_updated = True
+-    # Resolve once: four separate lookups could disagree if a concurrent
+-    # ``mulder setup`` publishes the clone mid-function.
+-    base = _signature_base_dir()
+-    if base is None or not (base / ".git").is_dir():
+-        return
+-    if not (os.access(base, os.W_OK) and os.access(base / ".git", os.W_OK)):
+-        # A pull has to write objects, refs and the worktree, and git also
+-        # refuses to touch a clone owned by another user. The container image
+-        # ships a root-owned, SHA-pinned clone under /opt and runs the server
+-        # as `mulder`, so there the pinned rules are the rules by design.
+-        logger.info(
+-            "YARA rules: %s is not writable by this user; using the installed checkout as-is",
+-            base,
+-        )
+-        return
+-    try:
+-        proc = subprocess.run(
+-            ["git", "-C", str(base), "pull", "--ff-only", "-q"],
+-            capture_output=True,
+-            text=True,
+-            timeout=30,
+-            check=False,
+-        )
+-    except (subprocess.TimeoutExpired, OSError):
+-        logger.debug("Could not update %s (no network?), using cached rules", base.name)
+-        return
+-    if proc.returncode == 0:
+-        logger.info("Updated YARA rules: %s", base.name)
+-    else:
+-        # Notably git's "detected dubious ownership" refusal, which is what a
+-        # root-owned clone plus a non-root server produces -- previously this
+-        # logged success and the rules silently never updated again.
+-        logger.warning(
+-            "Could not update %s (git exit %d): %s",
+-            base,
+-            proc.returncode,
+-            (proc.stderr or "").strip()[:200],
+-        )
+-
+-
+ def _collect_signature_base() -> list[str]:
+     """Return .yar paths from Neo23x0/signature-base."""
+     base = _signature_base_dir()
+@@ -305,7 +241,8 @@ def _build_rules_args(
+     ruleset: str = "builtin",
+ ) -> tuple[list[str], bool]:
+     """Build the CLI args list for yara rules and return cleanup flag."""
+-    _update_community_rules()
++    # Lawliet investigation tools use installed rules without network updates.
++    # Fetch or update rule assets only in a separate, explicit setup operation.
+ 
+     if rules is not None:
+         stripped = rules.strip()
+diff --git a/tests/test_extract_helpers.py b/tests/test_extract_helpers.py
+index 4a40175..e93d329 100644
+--- a/tests/test_extract_helpers.py
++++ b/tests/test_extract_helpers.py
+@@ -106,8 +106,8 @@ class TestExtractAndIndex:
+         reconstructed = "".join(w.raw_text for w in windows)
+         assert reconstructed == raw_output
+ 
+-    def test_uniform_window_sizes(self, _mock_server_ctx: ServerContext) -> None:
+-        """Windows are uniformly sized at the char budget (except the last)."""
++    def test_overlong_record_uses_one_lossless_window(self, _mock_server_ctx: ServerContext) -> None:
++        """The budget is soft: a logical record must survive whole."""
+         raw_output = "X" * (_WINDOW_CHAR_BUDGET * 3 + 500)
+ 
+         with self._patch_ctx(_mock_server_ctx):
+@@ -119,10 +119,9 @@ class TestExtractAndIndex:
+             )
+ 
+         windows = _mock_server_ctx.db.get_windows_by_source("uniform.log")
+-        assert len(windows) == 4
+-        for w in windows[:-1]:
+-            assert len(w.raw_text) == _WINDOW_CHAR_BUDGET
+-        assert len(windows[-1].raw_text) == 500
++        assert len(windows) == 1
++        assert windows[0].raw_text == raw_output
++        assert windows[0].line_start == windows[0].line_end == 1
+ 
+     def test_short_input_single_window(self, _mock_server_ctx: ServerContext) -> None:
+         """Input smaller than the budget fits in one window."""
+diff --git a/tests/test_window_alignment.py b/tests/test_window_alignment.py
+index 4581288..7ad6cc2 100644
+--- a/tests/test_window_alignment.py
++++ b/tests/test_window_alignment.py
+@@ -69,15 +69,16 @@ class TestLineAlignedWindows:
+         for window, _, _ in _line_aligned_windows(_pslist()):
+             assert len(window) <= _WINDOW_CHAR_BUDGET
+ 
+-    def test_a_single_overlong_line_is_still_split(self) -> None:
++    def test_a_single_overlong_line_remains_whole(self) -> None:
+         blob = "A" * (_WINDOW_CHAR_BUDGET * 3 + 17) + "\n"
+         windows = list(_line_aligned_windows(blob))
+-        assert len(windows) == 4
++        assert len(windows) == 1
+         assert "".join(w for w, _, _ in windows) == blob
+         assert all(s == 1 and e == 1 for _, s, e in windows)
+ 
+-    def test_blank_only_windows_are_dropped(self) -> None:
+-        assert list(_line_aligned_windows("\n\n   \n\n")) == []
++    def test_blank_only_windows_preserve_input(self) -> None:
++        text = "\n\n   \n\n"
++        assert "".join(w for w, _, _ in _line_aligned_windows(text)) == text
+ 
+     def test_empty_input(self) -> None:
+         assert list(_line_aligned_windows("")) == []
+diff --git a/src/mulder/server/tools/lawliet_evidence_viewer.py b/src/mulder/server/tools/lawliet_evidence_viewer.py
+new file mode 100644
+index 0000000..4332dcc
+--- /dev/null
++++ b/src/mulder/server/tools/lawliet_evidence_viewer.py
+@@ -0,0 +1,33 @@
++"""Bounded exact-byte inspection restricted to the active Mulder review case."""
++from mulder.server.app import mcp
++from mulder.server.helpers import error_response, make_tool_call_id
++from mulder.server.tool_access import Role, tool_access
++from mulder.server.tools.lawliet_sqlite_workspace import _review_case
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def inspect_ancalor_evidence(case_path: str, file_id: int, offset: int = 0,
++                             length: int = 4096, encoding: str = 'utf-8',
++                             format_name: str | None = None) -> dict[str, object]:
++    """Inspect exact source bytes/offsets with explicit derived text/structure.
++
++    Select a retained file_id in a direct lawliet-review child of this active
++    Mulder case. Max64KiB window, 512MiB verified source. JSON/XML/plist are
++    explicit optional whole-file derived views, capped1MiB input and isolated
++    for5seconds. No arbitrary paths or symlinks. Hex is authoritative; invalid
++    text decoding is visible and structured nodes are not byte-offset maps.
++    No artifact/finding/deletion inference. Unsupported binary formats refused.
++    """
++    from lawliet_mobile.core import UserError, connect
++    from lawliet_mobile.evidence_viewer import inspect_file
++    params = dict(case_path=case_path, file_id=file_id, offset=offset, length=length,
++                  encoding=encoding, format_name=format_name)
++    tc_id = make_tool_call_id()
++    try:
++        selected = _review_case(case_path)
++        with connect(selected.parent, selected.name) as (root, db):
++            result = inspect_file(root, db, file_id, offset, length, encoding, format_name)
++        return {'tool_call_id': tc_id, 'status': 'success', 'result': result}
++    except (UserError, OSError, ValueError) as exc:
++        return error_response(tc_id, 'inspect_ancalor_evidence', params, str(exc), error_type='invalid_or_unavailable_view')
+diff --git a/src/mulder/server/tools/lawliet_recovery.py b/src/mulder/server/tools/lawliet_recovery.py
+new file mode 100644
+index 0000000..1728af6
+--- /dev/null
++++ b/src/mulder/server/tools/lawliet_recovery.py
+@@ -0,0 +1,86 @@
++"""Bounded supplied-SQLite recovery; no device or physical-drive acquisition."""
++from __future__ import annotations
++import hashlib
++import json
++import shutil
++import subprocess
++import time
++from pathlib import Path
++from mulder.server.app import get_ctx, mcp
++from mulder.server.extract_helpers import extract_and_index
++from mulder.server.helpers import error_response, make_tool_call_id, tool_response
++from mulder.server.tool_access import Role, tool_access
++
++
++def _hash(path: Path) -> str:
++    with path.open('rb') as stream:
++        return hashlib.file_digest(stream, 'sha256').hexdigest()
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def run_ancalor_sqlite_recovery(evidence_path: str) -> dict[str, object]:
++    """Carve candidates from one supplied decrypted SQLite DB and companions.
++
++    Requires pinned SQLite Dissect 1.0.0. Copies regular DB/-wal/-shm/-journal
++    inputs (combined 512 MiB max), retains originals, logs, CSVs and audited
++    candidate records. Carved candidates are NOT confirmed deleted messages.
++    WAL pairing stays unverified. No device access or encrypted-key guessing.
++    Zero candidates never proves no deletion. Runtime bounded to 120 seconds.
++    """
++    from lawliet_mobile.core import create_case, connect, import_evidence, select_artifacts, verify, UserError
++    from lawliet_mobile.recovery import recover_sqlite
++    from lawliet_mobile.report import write_export, write_report
++    from lawliet_mobile.tools import configure
++    tc_id=make_tool_call_id();started=time.monotonic();params={'evidence_path':evidence_path}
++    supplied=Path(evidence_path)
++    if supplied.is_symlink() or not supplied.is_file():
++        return error_response(tc_id,'run_ancalor_sqlite_recovery',params,'A regular supplied SQLite file is required',error_type='invalid_input')
++    with supplied.open('rb') as stream:header=stream.read(20)
++    if header[:16]!=b'SQLite format 3\x00':
++        return error_response(tc_id,'run_ancalor_sqlite_recovery',params,'Decrypted SQLite header required; encrypted/corrupt input is not a negative recovery result',error_type='unsupported_or_corrupt')
++    sources=[supplied]
++    for suffix in ('-wal','-shm','-journal'):
++        sidecar=Path(str(supplied)+suffix)
++        if sidecar.is_symlink() or (sidecar.exists() and not sidecar.is_file()):
++            return error_response(tc_id,'run_ancalor_sqlite_recovery',params,'Companions must be regular supplied files',error_type='invalid_input')
++        if sidecar.exists():sources.append(sidecar)
++    if sum(p.stat().st_size for p in sources)>512*1024**2:
++        return error_response(tc_id,'run_ancalor_sqlite_recovery',params,'Combined SQLite inputs exceed 512 MiB',error_type='input_limit')
++    engine=shutil.which('sqlite-dissect')
++    if not engine:
++        return error_response(tc_id,'run_ancalor_sqlite_recovery',params,'Pinned SQLite Dissect launcher not available',error_type='tool_unavailable')
++    version=subprocess.run([engine,'--version'],capture_output=True,text=True,timeout=10)
++    if version.returncode or version.stdout.strip()!='version 1.0.0':
++        return error_response(tc_id,'run_ancalor_sqlite_recovery',params,'This adapter requires SQLite Dissect 1.0.0',error_type='unsupported_version')
++    workspace=Path(get_ctx().db.db_path).parent/'lawliet-review';case_id='RECOVERY-'+str(tc_id).replace('_','-')
++    create_case(workspace,case_id,examiner='Codex/Mulder candidate recovery')
++    case=workspace/case_id;stage=case/'supplied';stage.mkdir()
++    receipt=[];retained={'case_path':str(case),'intake_manifest':str(case/'supplied-manifest.json')}
++    try:
++        for source in sources:
++            before=_hash(source);copy=stage/source.name;shutil.copyfile(source,copy)
++            if before!=_hash(source) or before!=_hash(copy):raise UserError('Supplied SQLite input changed during copying')
++            receipt.append({'path':str(source),'retained':str(copy),'sha256':before,'size':copy.stat().st_size})
++        (case/'supplied-manifest.json').write_text(json.dumps(receipt,indent=2))
++        (case/'engine-version.txt').write_text(version.stdout)
++        configure(case,'sqlite-dissect',engine)
++        with connect(workspace,case_id) as (root,db):
++            eid=import_evidence(root,db,stage,'unknown',expand_archives=False)[0]
++            file_id=db.execute('SELECT id FROM files WHERE evidence_id=? AND path=?',(eid,supplied.name)).fetchone()[0]
++            result=recover_sqlite(root,db,case,file_id,120)
++            rows=select_artifacts(db,run=result['run_id'],limit=100001)
++            if len(rows)>100000:raise UserError('Recovery candidate export exceeds100000 rows; retained case requires scoped review')
++            write_export(root,db,root/'exports/candidates.jsonl','jsonl',rows)
++            write_report(root,db,root/'exports/review.html')
++            integrity=verify(root,db)
++        if not integrity['ok'] or any(_hash(Path(row['path']))!=row['sha256'] for row in receipt):raise UserError('Post-analysis source integrity check failed')
++        retained.update(jsonl=str(case/'exports/candidates.jsonl'),html=str(case/'exports/review.html'),run=str(case/'runs'/result['run_id']))
++        summary={'state':'limited','candidates':len(rows),'retained':retained,'engine':'sqlite-dissect/1.0.0','originals_unchanged':True,'wal_present':Path(str(supplied)+'-wal').exists(),'wal_pairing':'unverified','scope':'Recovery observations require examiner corroboration; no confirmed message/deletion attribution; zero candidates is not clearance.'}
++        indexed=extract_and_index('\n'.join([json.dumps(summary)]+[json.dumps(row,ensure_ascii=False) for row in rows]),'phone.lawliet_recovery',str(supplied),'lawliet-sqlite-recovery/1')
++        indexed.update(summary)
++        response=tool_response(tc_id,'run_ancalor_sqlite_recovery',params,indexed,'phone.lawliet_recovery',(time.monotonic()-started)*1000);response['result']=indexed;return response
++    except (UserError,OSError,ValueError) as exc:
++        response=error_response(tc_id,'run_ancalor_sqlite_recovery',params,str(exc),error_type='recovery_failed')
++        response['retained']=retained
++        return response
+diff --git a/src/mulder/server/tools/lawliet_sqlite_workspace.py b/src/mulder/server/tools/lawliet_sqlite_workspace.py
+new file mode 100644
+index 0000000..e62c1fe
+--- /dev/null
++++ b/src/mulder/server/tools/lawliet_sqlite_workspace.py
+@@ -0,0 +1,60 @@
++"""Bounded examiner SQL over imported files belonging to the active Mulder case."""
++from pathlib import Path
++import time
++from mulder.server.app import get_ctx, mcp
++from mulder.server.helpers import error_response, make_tool_call_id, tool_response
++from mulder.server.tool_access import Role, tool_access
++
++
++def _review_case(case_path):
++    from lawliet_mobile.core import UserError
++    if not isinstance(case_path, str) or not case_path:
++        raise UserError('An active-case Lawliet review path is required.')
++    root = Path(case_path).absolute()
++    allowed = (Path(get_ctx().db.db_path).parent / 'lawliet-review').absolute()
++    # Only immediate review children are valid connect(workspace, case) targets.
++    if (any(p.is_symlink() for p in (root, *root.parents)) or
++            root.resolve().parent != allowed.resolve() or
++            (root / 'case.sqlite').is_symlink() or not (root / 'case.sqlite').is_file()):
++        raise UserError('Select an Lawliet review case directly inside this active Mulder case; symlinks and other cases are refused.')
++    return root
++
++
++@mcp.tool()
++@tool_access(Role.EXTRACT_EXECUTOR)
++def run_ancalor_sqlite_query(case_path: str, file_id: int, sql: str,
++                             row_limit: int = 1000, max_output_bytes: int = 8388608,
++                             timeout_seconds: float = 5) -> dict[str, object]:
++    """Run bounded read-only SQL on an imported SQLite file in this Mulder case.
++
++    Uses disposable copies with source hashes, preserves query/results/receipts,
++    and returns a bounded preview of ordered rows (duplicate columns retained).
++    Only SELECT/read operations accepted; no attachment or extension loading.
++    WAL pairing is unverified. SQL results are observations, not findings or
++    deleted-record confirmation; empty results do not establish absence.
++    case_path must be a direct retained lawliet-review child of the active case.
++    Limits: 1–100000 rows, 1024–16777216 output bytes, 0.05–30 seconds.
++    """
++    from lawliet_mobile.core import UserError, connect
++    from lawliet_mobile.sqlite_workspace import query
++    tc_id = make_tool_call_id()
++    started = time.monotonic()
++    params = dict(case_path=case_path, file_id=file_id, sql=sql, row_limit=row_limit,
++                  max_output_bytes=max_output_bytes, timeout_seconds=timeout_seconds)
++    try:
++        root = _review_case(case_path)
++        with connect(root.parent, root.name) as (case, db):
++            result = query(case, db, file_id, sql, row_limit=row_limit,
++                           max_output_bytes=max_output_bytes, timeout_seconds=timeout_seconds)
++        result['case_path'] = str(root)
++        result['interpretation_limit'] = 'Examiner query observations only; no finding, deletion or absence determination.'
++        if result['status'] == 'failed':
++            response = error_response(tc_id, 'run_ancalor_sqlite_query', params,
++                                      'SQLite query failed; retained receipt contains execution details.', error_type='query_failed')
++        else:
++            response = tool_response(tc_id, 'run_ancalor_sqlite_query', params, result,
++                                     'phone.lawliet_sqlite_workspace', (time.monotonic() - started) * 1000)
++        response['result'] = result
++        return response
++    except (UserError, OSError, ValueError) as exc:
++        return error_response(tc_id, 'run_ancalor_sqlite_query', params, str(exc), error_type='invalid_or_unavailable_query')

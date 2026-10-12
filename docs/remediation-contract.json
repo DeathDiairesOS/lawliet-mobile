@@ -1,0 +1,73 @@
+{
+  "requirement": "MOB-092",
+  "status": "partial_backend_implemented",
+  "formal_acceptance": false,
+  "module": "ancalor_mobile.remediation",
+  "calls": {
+    "record": "record(db, value)",
+    "history": "history(db, after=0, limit=100, action_id=None)"
+  },
+  "record_fields": {
+    "required": [
+      "actor",
+      "description",
+      "category",
+      "status"
+    ],
+    "references": "file_ids list of at most100 current-case file IDs and/or investigation_id; source files must be inside supplied investigation scope",
+    "optional": [
+      "supporting_reference",
+      "preservation_agreement_reference",
+      "action_id",
+      "latest_event_id",
+      "change_reason"
+    ]
+  },
+  "states": {
+    "preservation": [
+      "preserved",
+      "unknown"
+    ],
+    "remediation": [
+      "recommended",
+      "completed",
+      "unknown"
+    ]
+  },
+  "gates": [
+    "Preserved/completed require nonempty supporting_reference.",
+    "Completed remediation requires preservation_agreement_reference.",
+    "Actor records claims; no independent authenticity or authorization is asserted.",
+    "Updating an action requires its latest event ID and a change reason. Category, source snapshots and investigation scope cannot change.",
+    "Later unknown status can correct/dispute an earlier completed claim without deleting history."
+  ],
+  "source_trace": "Exact retained registry file ID, evidence ID, physical/logical locator, size and SHA256 snapshotted per event. This records intake metadata, not a fresh source rehash. Investigation ID is scoped and validated.",
+  "integrity": "Uses existing case audit hash chain; verifies ledger before every append/read. History is immutable through this API. Local chain is tamper-evident only, not externally authenticated or rollback-proof.",
+  "response": "record returns event_id, action_id, previous_event_id, recorded_at, operator fields, source snapshots, execution=not-executed-by-tool, verification=operator-recorded; independently unverified, limitations. history returns events including audit_id, has_more, next_cursor, limitations. limit1\u2013100.",
+  "ui_requirements": [
+    "Show preservation separately from recommended and reported-completed remediation.",
+    "Keep recommendation/completion status beside supporting and preservation agreement references.",
+    "Render event history and explicit corrections; never infer completion from preservation or recommendation.",
+    "Do not label operator-recorded completion as independently verified."
+  ],
+  "execution": "No network, remote, device, account or shell action; no product-generated cybersecurity recommendations. Operator chooses and records steps.",
+  "export_proposal": "Future investigation report integration must explicitly select action IDs scoped to the investigation and include all selected action revisions/limitations; no whole-case automatic injection. Free-text/reference fields may contain sensitive evidence; no redaction support or external release claim.",
+  "not_implemented": [
+    "Desktop presentation",
+    "report integration",
+    "external actions",
+    "independent reviewer acceptance",
+    "authenticated consent or completion verification"
+  ],
+  "backend_actions": {
+    "remediation-record": {
+      "event": "record value object"
+    },
+    "remediation-history": {
+      "after": 0,
+      "limit": 100,
+      "action_id": "optional filter"
+    }
+  },
+  "concurrency": "BEGIN IMMEDIATE before reads; pre-existing deferred transactions acquire a write reservation via zero-row update. Competing updates to the same latest_event_id serialize; stale revision rejected. Caller transaction owns commit/rollback."
+}

@@ -1,0 +1,199 @@
+diff --git a/scripts/artifacts/swellbeing.py b/scripts/artifacts/swellbeing.py
+index 68e33f2..507cfd3 100755
+--- a/scripts/artifacts/swellbeing.py
++++ b/scripts/artifacts/swellbeing.py
+@@ -36,10 +36,10 @@ __artifacts_v2__ = {
+         "description": "Parses Samsung Digital Wellbeing timezone changes from dwbCommon.db.",
+         "author": "Kevin Pagano (@stark4n6)",
+         "creation_date": "2026-08-03",
+-        "last_update_date": "2026-08-03",
++        "last_update_date": "2026-10-12",
+         "requirements": "none",
+         "category": "Digital Wellbeing",
+-        "notes": (),
++        "notes": "Raw application timezone tokens only; no location or action attribution. Millisecond timestamp interpretation is explicit; raw values and locators retained. Empty previous token is not UTC. Malformed text remains diagnostic. Distinct source paths remain separate.",
+         "paths": ('*/com.samsung.android.forest/databases/dwbCommon.db*',),
+         "output_types": "standard",
+         "artifact_icon": "clock",
+@@ -51,6 +51,16 @@ __artifacts_v2__ = {
+ }
+ 
+ import datetime
++import contextlib
++import os
++import stat
++import tempfile
++import hashlib
++import json
++import re
++import sqlite3
++import time
++from pathlib import Path
+ 
+ from scripts.ilapfuncs import artifact_processor, open_sqlite_db_readonly, convert_unix_ts_to_utc, get_sqlite_db_records, get_file_path
+ 
+@@ -124,29 +134,139 @@ def samsung_wellbeing(context):
+     data_headers = (('Timestamp', 'datetime'), 'Event ID', 'Package Name', 'Event Type', 'Event Type Description')
+     return data_headers, data_list, source_path
+ 
++# These are application log tokens, not proof of location or deliberate action.
++_TZ_TEXT = re.compile(r"prevTimezone\( *([^(),\r\n]*) *\), *newTimezone\( *([^(),\r\n]*) *\)(?:, *now\( *(-?[0-9]+) *\))?")
++_TZ_TOKEN = re.compile(r"[A-Za-z0-9_+./:-]{1,128}")
++
++def _timezone_fields(stamp, value):
++    status = []
++    timestamp = None
++    if type(stamp) is not int:
++        status.append('unsupported_timestamp_type')
++    else:
++        try:
++            timestamp = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc) + datetime.timedelta(milliseconds=stamp)
++        except (OverflowError, ValueError):
++            status.append('timestamp_out_of_range')
++    previous = new = embedded_now = None
++    match = _TZ_TEXT.fullmatch(value) if isinstance(value, str) and len(value) <= 65536 else None
++    if match is None:
++        status.append('unparsed_timezone_text')
++    else:
++        previous, new = match[1].strip(), match[2].strip()
++        embedded_now = match[3]  # Preserve decimal text; not substituted for row time.
++        if (previous and not _TZ_TOKEN.fullmatch(previous)) or not _TZ_TOKEN.fullmatch(new):
++            status.append('unsupported_timezone_token')
++        if previous == '':
++            status.append('empty_previous_as_stored')
++    return timestamp, previous, new, embedded_now, ';'.join(status) or 'parsed_tokens_only'
++
++TZ_PARSER_REVISION = 'staged-2026-10-12-v3'
++_TZ_ASCII_LOWER = str.maketrans('ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz')
++
++def _timezone_identity(value):
++    return (value.st_dev, value.st_ino, value.st_mode, value.st_size, value.st_mtime_ns, value.st_ctime_ns)
++
++def _timezone_source_state(path):
++    result = {}
++    for suffix in ('', '-wal', '-shm', '-journal'):
++        p = Path(str(path) + suffix)
++        if any(x.is_symlink() for x in (p, *p.parents)):
++            raise ValueError('Timezone source symlink refused')
++        if not p.exists():
++            if not suffix:
++                raise ValueError('Timezone main database missing')
++            continue
++        if p.is_symlink() or not p.is_file() or p.stat().st_size > 256 * 1024**2:
++            raise ValueError('Unsupported timezone source type/size')
++        before = p.stat(); digest = hashlib.sha256(); count = 0
++        with p.open('rb') as source:
++            if _timezone_identity(os.fstat(source.fileno())) != _timezone_identity(before):
++                raise ValueError('Timezone source identity changed')
++            for chunk in iter(lambda: source.read(1024**2), b''):
++                count += len(chunk)
++                if count > before.st_size or count > 256 * 1024**2:
++                    raise ValueError('Timezone source grew during hash')
++                digest.update(chunk)
++            if _timezone_identity(os.fstat(source.fileno())) != _timezone_identity(before):
++                raise ValueError('Timezone source identity changed during read')
++        after = p.stat()
++        if (before.st_ino, before.st_size, before.st_mtime_ns, before.st_ctime_ns) != (after.st_ino, after.st_size, after.st_mtime_ns, after.st_ctime_ns) or count != before.st_size:
++            raise ValueError('Timezone source changed during hash')
++        result[suffix or 'main'] = {'bytes': count, 'sha256': digest.hexdigest()}
++    return result
++
++@contextlib.contextmanager
++def _timezone_snapshot(path):
++    state = _timezone_source_state(path)
++    with tempfile.TemporaryDirectory(prefix='aleapp-timezone-') as directory:
++        copied = Path(directory).resolve() / 'dwbCommon.db'
++        for label, item in state.items():
++            suffix = '' if label == 'main' else label
++            source_path = Path(str(path) + suffix)
++            target_path = Path(str(copied) + suffix)
++            with source_path.open('rb') as source, target_path.open('xb') as target:
++                before = source_path.stat()
++                if _timezone_identity(os.fstat(source.fileno())) != _timezone_identity(before):
++                    raise ValueError('Timezone source identity changed before copy')
++                written = 0
++                while True:
++                    chunk = source.read(min(1024**2, item['bytes'] - written + 1))
++                    if not chunk:
++                        break
++                    written += len(chunk)
++                    if written > item['bytes']:
++                        raise ValueError('Timezone snapshot growth refused')
++                    target.write(chunk)
++                if written != item['bytes'] or _timezone_identity(os.fstat(source.fileno())) != _timezone_identity(before) or _timezone_identity(source_path.stat()) != _timezone_identity(before):
++                    raise ValueError('Timezone source changed during copy')
++        if _timezone_source_state(copied) != state or _timezone_source_state(path) != state:
++            raise ValueError('Timezone snapshot/source changed or mismatch')
++        try:
++            yield str(copied), state
++        finally:
++            if _timezone_source_state(path) != state:
++                raise ValueError('Samsung Logging source state changed')
++
+ @artifact_processor
+ def samsung_wellbeing_timezone(context):
+-    files_found = context.get_files_found()
+-
+-    data_list = []
+-    source_path = get_file_path(files_found, "dwbCommon.db")
+-    
+-    query  = '''
+-    SELECT
+-    timeStamp,
+-    Value
+-    from Logging
+-    where key like '%UsageDataManager::timeZoneChanged()%'
+-    '''
+-    
+-    db_records = get_sqlite_db_records(source_path, query)
+-    
+-    for record in db_records:
+-        time = convert_unix_ts_to_utc(record[0])
+-        pre_timezone = record[1].split(', ')[0].replace('prevTimezone( ','')[:-1]
+-        new_timezone = record[1].split(', ')[1].replace('newTimezone( ','')[:-1]
+-        
+-        data_list.append((time, pre_timezone, new_timezone))
+-                            
+-    data_headers = (('Timestamp', 'datetime'),'Previous Timezone','New Timezone')
+-    return data_headers, data_list, source_path
+\ No newline at end of file
++    data_list = []; sources = []; used = 0; row_count = 0
++    # Distinct paths remain separate, including aliases; no unproved deduplication.
++    for source_path in sorted(set(str(p) for p in context.get_files_found() if str(p).endswith('/dwbCommon.db'))):
++        source_label = context.get_relative_path(source_path)
++        with _timezone_snapshot(source_path) as (copied_path, state):
++            db = open_sqlite_db_readonly(copied_path)
++            try:
++                db.execute('PRAGMA query_only=ON')
++                db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH, 1024**2)
++                deadline = time.monotonic() + 10
++                db.set_progress_handler(lambda: int(time.monotonic() > deadline), 1000)
++                columns = {str(r[1]).lower() for r in db.execute('PRAGMA table_info(Logging)')}
++                if not {'id', 'key', 'value', 'timestamp'}.issubset(columns) or columns & {'rowid', '_rowid_', 'oid'}:
++                    raise ValueError('Unsupported Samsung Logging schema')
++                for row in db.execute('SELECT rowid,id,key,value,timeStamp FROM Logging ORDER BY rowid'):
++                    row_count += 1
++                    if row_count > 100000:
++                        raise ValueError('Samsung Logging row cap exceeded')
++                    if any(isinstance(value, bytes) for value in row):
++                        raise ValueError('Unsupported Samsung Logging BLOB scalar; whole source refused')
++                    raw_size = len(json.dumps(row, ensure_ascii=True).encode())
++                    used += raw_size
++                    if raw_size > 1024**2 or used > 32 * 1024**2:
++                        raise ValueError('Samsung Logging result byte cap exceeded')
++                    rid, event_id, key, value, stamp = row
++                    if not isinstance(key, str):
++                        continue
++                    legacy = 'usagedatamanager::timezonechanged()' in key.translate(_TZ_ASCII_LOWER)
++                    current = key == 'DWBThread' and isinstance(value, str) and ('prevTimezone' in value or 'newTimezone' in value)
++                    if not (legacy or current):
++                        continue  # Broadcast and difference diagnostics are not causally joined.
++                    timestamp, previous, new, embedded_now, status = _timezone_fields(stamp, value)
++                    data_list.append((timestamp, previous, new, stamp, embedded_now, rid, event_id, key, value, status, source_label, json.dumps(state, sort_keys=True)))
++            finally:
++                db.close()
++        sources.append(source_path)
++    headers = (('Timestamp', 'datetime'), 'Previous Timezone (as stored)', 'New Timezone (as stored)',
++               'Raw timeStamp (Unix milliseconds assumption)', 'Embedded now (raw decimal text)',
++               'SQLite RowID', 'Stored ID', 'Raw Key', 'Raw Value', 'Parse State', 'Source File', 'Source State SHA256')
++    return headers, data_list, '\n'.join(sources)

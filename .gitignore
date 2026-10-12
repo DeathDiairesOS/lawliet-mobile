@@ -6,3 +6,60 @@ ancalor-cases/
 demo-output/
 build/
 dist/
+.session-watch/
+
+.device-interaction/
+
+# Developer-only scratch, runtime configuration and generated artifacts
+/work/
+.DS_Store
+.pytest_cache/
+.coverage
+htmlcov/
+.env
+.env.*
+!.env.example
+*.app/
+/tools.json
+/engine-config.json
+
+# Local recovery receipts and live session coordination (preserved on disk)
+/RECOVERY_STATUS.txt
+/docs/local-workspace.txt
+/docs/session-handoff.json
+/docs/session-handoff.lock
+/docs/task-progress.json
+/docs/local-recovery-status.json
+/docs/ui-recovery-provenance.json
+/docs/reconstruction-provenance.json
+/docs/acceptance-tracker.json
+/docs/DFIR-6-capability-review.json
+/docs/DFIR-6-completion-review.json
+/docs/DFIR-23-candidate-support-matrix.json
+/docs/DFIR-23-native-wal-limitations.json
+
+# Local validation notes containing machine-specific source references
+/docs/UI-UX-AUDIT.md
+/docs/android-mms-contract.json
+/docs/competency-contract.json
+/docs/coverage-ledger-contract.json
+/docs/custody-contract.json
+/docs/customer-report-contract.json
+
+# Evidence and local runtime trees must not enter a source commit
+/cases/
+/evidence/
+/runtime/
+/validation/
+/outputs/
+/logs/
+/intake/
+/originals/
+/snapshots/
+/backups/
+/.mcp.json
+
+# Local migration aliases for sessions already using the old paths
+/ancalor_mobile
+/desktop/AncalorMobile.swift
+/desktop/AncalorTheme.swift

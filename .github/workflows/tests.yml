@@ -12,9 +12,11 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: ${{ matrix.python }}
+      - name: Check repository publishing boundaries
+        run: python tools/repository_preflight.py
       - name: Run standard-library tests
         run: python -m unittest discover -s tests -v
       - name: Exercise the CLI
-        run: python -m ancalor_mobile demo --workspace demo-output --json
+        run: python -m lawliet_mobile demo --workspace demo-output --json
       - name: Verify demo evidence
-        run: python -m ancalor_mobile verify --case demo --workspace demo-output --json
+        run: python -m lawliet_mobile verify --case demo --workspace demo-output --json

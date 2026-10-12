@@ -12,16 +12,17 @@ import sys
 import tarfile
 import tempfile
 import unittest
+from unittest.mock import patch
 import zipfile
 from pathlib import Path
 
-from ancalor_mobile.cli import main
-from ancalor_mobile.correlate import shared_entities
-from ancalor_mobile.core import UserError, audit, connect, create_case, digest, extract_archive, import_evidence, select_artifacts, verify
-from ancalor_mobile.demo import create_demo, transaction
-from ancalor_mobile.parsers import native_analyze, timestamp
-from ancalor_mobile.report import write_export, write_report
-from ancalor_mobile.tools import collect, configure, devices, execute, external_analyze
+from lawliet_mobile.cli import main
+from lawliet_mobile.correlate import shared_entities
+from lawliet_mobile.core import UserError, audit, connect, create_case, digest, extract_archive, import_evidence, select_artifacts, verify
+from lawliet_mobile.demo import create_demo, transaction
+from lawliet_mobile.parsers import native_analyze, timestamp
+from lawliet_mobile.report import write_export, write_report
+from lawliet_mobile.tools import collect, configure, devices, execute, external_analyze
 
 
 class MobileTests(unittest.TestCase):
@@ -38,6 +39,28 @@ class MobileTests(unittest.TestCase):
             db.execute("CREATE TABLE sms(_id INTEGER,date INTEGER,address TEXT,body TEXT,type INTEGER)")
             db.execute("INSERT INTO sms VALUES(1,1791640800000,'+1-202-555-0100',?,1)", (body,))
         return path
+
+    def test_ios_conversations_use_stored_chat_links_and_preserve_body_gaps(self):
+        from lawliet_mobile.messages import conversations
+        source = self.base / 'sms.db'
+        with transaction(sqlite3.connect(source)) as db:
+            db.executescript("""CREATE TABLE handle(id TEXT); INSERT INTO handle VALUES('555');
+              CREATE TABLE message(date INTEGER,text TEXT,handle_id INTEGER,is_from_me INTEGER,service TEXT,attributedBody BLOB);
+              INSERT INTO message VALUES(813592800,'plain body',1,0,'iMessage',NULL);
+              INSERT INTO message VALUES(813592801,NULL,1,1,'iMessage',X'010203');
+              CREATE TABLE chat_message_join(chat_id INTEGER,message_id INTEGER);
+              INSERT INTO chat_message_join VALUES(10,1); INSERT INTO chat_message_join VALUES(20,2);""")
+        with connect(self.workspace, 'test') as (root, db):
+            eid, _, _ = import_evidence(root, db, source, 'ios')
+            self.assertEqual(native_analyze(root, db, eid)['new_records'], 2)
+            self.assertEqual(len(conversations(db, app='imessage')), 2)
+            rows = select_artifacts(db, app='imessage')
+            self.assertEqual(rows[0]['data']['message']['chat_ids'], ['10'])
+            self.assertEqual(rows[1]['body'], '')
+            self.assertEqual(rows[1]['data']['message']['body_status'], 'opaque_body_not_decoded')
+            self.assertEqual(rows[1]['data']['message']['rich_event']['state'], 'not_decoded')
+            self.assertTrue(rows[1]['title'].startswith('Undecoded message event · '))
+            self.assertEqual(rows[1]['data']['attributedBody'], {'blob_bytes': 3})
 
     def test_android_native_and_idempotence(self):
         source = self.sms_database()
@@ -271,6 +294,21 @@ class MobileTests(unittest.TestCase):
         with self.assertRaises(subprocess.TimeoutExpired):
             execute([sys.executable, "-c", "import time; time.sleep(10)"], self.base / "timeout.log", timeout=0.05)
 
+    def test_external_timeout_retains_command_details(self):
+        fake = self.base / "slow_aleapp.py"
+        fake.write_text("import time; time.sleep(10)\n")
+        configure(self.workspace, "aleapp", fake)
+        with connect(self.workspace, "test") as (root, db):
+            eid, _, _ = import_evidence(root, db, self.sms_database(), "android")
+            with self.assertRaises(subprocess.TimeoutExpired):
+                external_analyze(root, db, self.workspace, eid, "aleapp", timeout=0.05)
+            run = db.execute("SELECT * FROM runs").fetchone()
+            self.assertEqual(run["status"], "failed")
+            detail = json.loads(run["detail"])
+            self.assertIn(str(fake.resolve()), detail["argv"])
+            self.assertTrue(Path(detail["stderr"]).exists())
+            self.assertNotEqual(detail["returncode"], 0)
+
     def test_android_collection_protocol(self):
         fake = self.base / "adb_fixture.py"
         fake.write_text("""import sys,pathlib,zipfile
@@ -300,6 +338,8 @@ a=sys.argv[1:]
 assert a[0:4]==['-u','TESTUDID','backup','--full']
 p=pathlib.Path(a[4])/'TESTUDID'; p.mkdir()
 (p/'Manifest.plist').write_bytes(plistlib.dumps({'IsEncrypted':False}))
+(p/'Status.plist').write_bytes(plistlib.dumps({'SnapshotState':'finished'}))
+m=sqlite3.connect(p/'Manifest.db'); m.execute('CREATE TABLE Files(fileID TEXT, domain TEXT, relativePath TEXT, flags INTEGER)'); m.commit(); m.close()
 d=sqlite3.connect(p/'sms.db')
 d.executescript("CREATE TABLE handle(id TEXT); INSERT INTO handle VALUES('555'); CREATE TABLE message(date INTEGER,text TEXT,handle_id INTEGER,is_from_me INTEGER,service TEXT); INSERT INTO message VALUES(813592800,'fixture',1,0,'SMS');")
 d.commit(); d.close()
@@ -310,6 +350,68 @@ d.commit(); d.close()
             self.assertEqual(result["status"], "complete")
             self.assertEqual(native_analyze(root, db, result["evidence_id"])["new_records"], 1)
             self.assertTrue(verify(root, db)["ok"])
+
+    def test_ios_success_exit_without_finished_backup_is_failed(self):
+        fake = self.base / "empty_backup.py"
+        fake.write_text("pass\n")
+        configure(self.workspace, "idevicebackup2", fake)
+        with connect(self.workspace, "test") as (root, db):
+            with self.assertRaisesRegex(UserError, "finished device backup"):
+                collect(root, db, self.workspace, "ios", "TESTUDID")
+            log = json.loads(next((root / "collections").glob("*/collection.json")).read_text())
+            self.assertEqual(log["status"], "failed")
+            self.assertIsNone(log["evidence_id"])
+            self.assertEqual(len(log["commands"]), 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM evidence").fetchone()[0], 0)
+
+    def test_collection_serial_cannot_escape_backup_directory(self):
+        with connect(self.workspace, "test") as (root, db):
+            for serial in ["../outside", "..\\outside"]:
+                with self.subTest(serial=serial), self.assertRaises(UserError):
+                    collect(root, db, self.workspace, "ios", serial)
+            self.assertFalse((root / "collections").exists())
+
+    def test_android_missing_bugreport_is_partial(self):
+        fake = self.base / "missing_bugreport.py"
+        fake.write_text("print('[ro.product.model]: [Fixture]')\n")
+        configure(self.workspace, "adb", fake)
+        with connect(self.workspace, "test") as (root, db):
+            result = collect(root, db, self.workspace, "android", "TESTSERIAL")
+            self.assertEqual(result["status"], "partial")
+            self.assertIn("bugreport ZIP", result["errors"][0]["error"])
+            self.assertTrue(verify(root, db)["ok"])
+
+    def test_android_all_commands_timeout_retains_attempts(self):
+        fake = self.base / "slow_adb.py"
+        fake.write_text("import time; time.sleep(10)\n")
+        configure(self.workspace, "adb", fake)
+        with connect(self.workspace, "test") as (root, db):
+            with self.assertRaisesRegex(UserError, "Every Android collection command failed"):
+                collect(root, db, self.workspace, "android", "TESTSERIAL", timeout=0.05)
+            log = json.loads(next((root / "collections").glob("*/collection.json")).read_text())
+            self.assertEqual(log["status"], "failed")
+            self.assertEqual(len(log["commands"]), 4)
+            for run in log["commands"]:
+                self.assertEqual(run["error"], "timeout")
+                self.assertTrue(Path(run["stderr"]).exists())
+                self.assertIn("TESTSERIAL", run["argv"])
+
+    def test_discovery_timeout_does_not_hide_other_platform(self):
+        fake = self.base / "discovery.py"
+        fake.write_text("print('TESTUDID')\n")
+        configure(self.workspace, "adb", fake)
+        configure(self.workspace, "idevice_id", fake)
+        real_execute = execute
+
+        def discover(argv, output, timeout):
+            if "devices" in argv:
+                raise subprocess.TimeoutExpired(argv, timeout)
+            return real_execute(argv, output, timeout)
+
+        with patch("lawliet_mobile.tools.execute", side_effect=discover):
+            rows = devices(self.workspace)
+        self.assertEqual(rows[0]["status"], "discovery_failed")
+        self.assertEqual(rows[1]["serial"], "TESTUDID")
 
     def test_cli_json_and_global_flags_after_subcommand(self):
         output = io.StringIO()

@@ -1,4 +1,4 @@
 #!/usr/bin/env python3
-from ancalor_mobile.cli import main
-
+"""Compatibility launcher; use lawliet for new commands."""
+from lawliet_mobile.cli import main
 raise SystemExit(main())

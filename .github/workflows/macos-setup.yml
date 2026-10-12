@@ -1,0 +1,25 @@
+name: Apple Silicon installation
+on:
+  push:
+    paths: ['setup.sh', 'setup/**', 'tools/bootstrap.py', 'tools/verify_mcp.py', 'lawliet_mobile/**', 'desktop/**', 'integrations/**', 'tests/test_leapp_integration.py', '.github/workflows/macos-setup.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fresh-install:
+    runs-on: macos-15
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install mobile tools, build app and verify synthetic records
+        run: ./setup.sh --runtime "$RUNNER_TEMP/lawliet-runtime" --workspace "$RUNNER_TEMP/lawliet-cases" --app "$RUNNER_TEMP/LAWLIET.app"
+      - name: Verify existing installation again without downloads
+        run: ./setup.sh --verify --runtime "$RUNNER_TEMP/lawliet-runtime" --workspace "$RUNNER_TEMP/lawliet-cases"
+      - name: Retain setup receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: apple-silicon-setup-receipts
+          path: |
+            ${{ runner.temp }}/lawliet-runtime/installation.json
+            ${{ runner.temp }}/lawliet-runtime/verification.json

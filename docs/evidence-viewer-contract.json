@@ -1,0 +1,51 @@
+{
+  "schema_version": 1,
+  "requirement": "MOB-065",
+  "status": "partial backend; UI/independent acceptance pending",
+  "api": "evidence_viewer.inspect_file(root, db, file_id, offset=0, length=4096, encoding=\"utf-8\", format_name=None)",
+  "formats": [
+    "raw hex",
+    "explicit text decode",
+    "json",
+    "xml",
+    "plist (XML and binary)"
+  ],
+  "source_identity": "Case-local files table ID; retained path/size/SHA256 verified before and after reading; all symlink ancestors refused. No arbitrary caller path.",
+  "byte_contract": "offset/end_offset_exclusive are zero-based source-byte indexes; hex is authoritative, window_sha256 covers exactly returned bytes. Beyond EOF returns empty bytes with requested offset. Windows can be concatenated verbatim as bytes.",
+  "text_contract": "Explicit UTF-8, UTF-16LE/BE or Latin-1, without automatic encoding guess or BOM removal. Text is a derived display. Invalid sequences use visible backslash escapes and absolute byte start/end metadata (first128 errors, exact total count). Window boundaries may split codepoints; hex remains authoritative.",
+  "json_contract": "Ordered object pairs preserve duplicate keys; integers/reals preserved as exact numeric lexemes; nonstandard NaN/Infinity refused. JSON Unicode string values are decoded interpretation, never an exact byte-offset map.",
+  "xml_contract": "Current Expat >=2.7.2 required. All XML-view DTD/entity/external-resolution/processing-instruction requests refused. No schema/XInclude transformations or network/file entity access. Ordered attributes, text and child elements/comments represented; lexical escaping/CDATA boundaries and outside-root comments are not preserved in tree; raw bytes are retained.",
+  "plist_contract": "Binary and XML plist typed dictionary/array/data/UID/date/scalar tree. Duplicate dictionary keys cause structured refusal. XML preflight permits only canonical inert Apple plist1.0 DOCTYPE with no internal subset; never fetches referenced DTD. Other DTDs/entities/PI refused. Dates are plist values, not inferred event times.",
+  "limits": {
+    "verified_source_bytes": 536870912,
+    "window_bytes": 65536,
+    "structured_input_bytes": 1048576,
+    "structured_output_bytes": 4194304,
+    "structured_depth": 64,
+    "structured_nodes": 10000,
+    "worker_wall_seconds": 5,
+    "worker": "isolated Python -I child, recursion limit500; no general filesystem/network or hard memory sandbox claimed"
+  },
+  "errors": "Structured failures/resource limits retain exact raw window and explicit state/error. Unsupported binary formats require a separately validated adapter; no guessed decoding.",
+  "primary_sources": [
+    "https://docs.python.org/3/library/xml.html#xml-security",
+    "https://pypi.org/project/defusedxml/"
+  ],
+  "dependencies": "No new dependency. Candidate Expat2.7.4 observed; check enforced at parse time.",
+  "pending": [
+    "UI owns presentation and confirmation of displayed byte offsets",
+    "Independent examiner acceptance",
+    "Additional binary formats require scoped adapters",
+    "No source authenticity, artifact semantic interpretation, deletion or identity assertion"
+  ],
+  "actions": {
+    "evidence-inspect": {
+      "file_id": "case-local imported file ID",
+      "offset": "nonnegative source-byte offset",
+      "length": "1\u201365536 bytes",
+      "encoding": "utf-8/utf-16-le/utf-16-be/latin-1",
+      "format": "optional json/xml/plist"
+    }
+  },
+  "mulder_tool": "inspect_ancalor_evidence(case_path,file_id,offset,length,encoding,format_name): strict active Mulder direct-child retained review case"
+}

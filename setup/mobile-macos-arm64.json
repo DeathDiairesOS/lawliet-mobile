@@ -1,0 +1,57 @@
+{
+  "schema_version": 1,
+  "platform": "darwin-arm64",
+  "python_minor": "3.13",
+  "minimum_macos": 13,
+  "brew_formulae": [
+    "python@3.13",
+    "exiftool",
+    "yara",
+    "scrcpy",
+    "libimobiledevice",
+    "libusb",
+    "sqlcipher",
+    "pkgconf"
+  ],
+  "brew_casks": [
+    "android-platform-tools"
+  ],
+  "sources": {
+    "mulder": {
+      "url": "https://github.com/calebevans/mulder.git",
+      "commit": "5321847887fe1fcb5399cec0a1703db9c513bac8",
+      "patch": "integrations/mulder/lawliet.patch",
+      "patch_sha256": "b20bb047587b3e29c8f6347775cb9cfddc86cda8c433cfa9f829fbf13dd7ef30",
+      "patched_diff_sha256": "3cd2c204b7d4496e65ad30c3a401a65104911ebf19bfa773fc01358e954822a0"
+    },
+    "aleapp": {
+      "url": "https://github.com/abrignoni/ALEAPP.git",
+      "commit": "c263270eeca9cb0b9c5286eff01728ab816617f8"
+    },
+    "ileapp": {
+      "url": "https://github.com/abrignoni/iLEAPP.git",
+      "commit": "4458434af545c4dbaf78355bb14696a67affb0c4"
+    }
+  },
+  "locks": {
+    "leapp": {
+      "path": "setup/locks/leapp-py313.txt",
+      "sha256": "af75198ef68e20591bc0005e28fb628f49bb863643a7e3b93521a13684791ac4"
+    },
+    "mulder": {
+      "path": "setup/locks/mulder-py313.txt",
+      "sha256": "7636dade7fc755d9838ee9304ae3ea5f94d1c852fc10f9bd9719a1adb405ca89"
+    },
+    "mvt": {
+      "path": "setup/locks/mvt-py313.txt",
+      "sha256": "4d51bcd48153b0d2da2baf313db0686ad68c3fb025c1df615dd1dcc89f61d604"
+    }
+  },
+  "expected_mulder_version": "1.5.2+lawliet.1",
+  "limitations": [
+    "Homebrew packages are rolling releases; actual versions recorded in receipt.",
+    "Python distributions pinned by version; no package hash lock yet.",
+    "No advanced Linux/SIFT assets installed by this mobile profile.",
+    "Synthetic smoke checks do not establish real-device or forensic accuracy acceptance."
+  ]
+}

@@ -1,0 +1,2 @@
+# Unified patches preserve upstream context and removed whitespace literally.
+*.patch -whitespace
