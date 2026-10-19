@@ -12,14 +12,14 @@ is separate from desktop rendering support.
 ## Validation status
 
 The installed native window passed the synthetic case-to-report flow on all three
-hosts in [run 39189164432](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39189164432).
+hosts in [run 39189489660](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39189489660).
 This establishes the desktop workflow; it does not establish identical forensic
 tool coverage or physical phone acquisition on every OS.
 
 | Host | Native desktop workflow | Backend qualification | Restricted agent collection endpoint |
 | --- | --- | --- | --- |
 | macOS | Passed, system WebKit | Required CLI checks and Apple Silicon installation pass | macOS only; separate qualified Mulder setup |
-| Windows | Passed, WebView2 | Broader regression fixes are still being qualified | Unavailable on this host |
+| Windows | Passed, WebView2 | Review preview; broader regression suite still fails | Unavailable on this host |
 | Linux | Passed, Qt under Xvfb | Required CLI checks pass | Unavailable on this host |
 
 The native smoke tests use the same Python backend as the CLI. Optional upstream
@@ -118,8 +118,14 @@ retained bundle and its validated provenance; raw arbitrary JSON is not accepted
 
 ## Current limits
 
-- Windows backend qualification remains in progress; generic failures are tracked
-  in CI and must be resolved before customer-case use on Windows.
+- Windows backend qualification remains incomplete. At `e928391`, the Python
+  3.14 broad suite ran 1,392 tests and reported 36 failures and 151 errors (351
+  skips). The targeted ownership tests and expanded native GUI passed separately.
+  Remaining issues include POSIX-specific provider collection staging, container
+  workflows and test fixtures. These are not all harmless test differences. Treat
+  Windows as a review preview; do not use its collection routes on customer phones
+  until method-specific qualification is complete. The restricted agent endpoint
+  remains macOS-only. [Broad run](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39189489574).
 - No one-click signed Windows/Linux installer is included yet. The installed
   `lawliet-desktop` entry point launches the desktop application from its venv.
 - Optional forensic tools, physical USB methods and remote providers need separate
