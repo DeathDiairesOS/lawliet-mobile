@@ -83,7 +83,7 @@ class CoverageLedgerTests(unittest.TestCase):
             eid=import_evidence(root,db,source,'android')[0];native_analyze(root,db,eid)
             entries=case_coverage(root,db)['ledger']['entries']
             self.assertTrue(any(x['state']=='parser-failed' and x['source']=='broken.db' for x in entries))
-            self.assertTrue(any(x['state']=='unresolved' and x['source']=='unknown.db' for x in entries))
+            self.assertTrue(any(x['state']=='unsupported' and x['source']=='unknown.db' for x in entries))
             self.assertFalse(any(x['state']=='searched-with-no-finding' for x in entries))
     def test_missing_expected_and_denied_collection_survive_export(self):
         with connect(self.ws,'A') as (root,db):

@@ -9,7 +9,7 @@ from .core import UserError, audit, now, select_artifacts, verify
 from .correlate import shared_entities
 
 
-def safe_output(root, db, destination):
+def safe_output(root, db, destination, create_parent=True):
     path = Path(destination).expanduser().resolve()
     evidence_dir = root / "evidence"
     if path == root / "case.sqlite" or path == evidence_dir or evidence_dir in path.parents:
@@ -18,117 +18,126 @@ def safe_output(root, db, destination):
         source = Path(row[0])
         if path == source or (source.is_dir() and source in path.parents):
             raise UserError("Output must not overwrite the original evidence input.")
-    path.parent.mkdir(parents=True, exist_ok=True)
+    if create_parent:
+        path.parent.mkdir(parents=True, exist_ok=True)
     return path
+
+
+def paired_output_paths(root, db, destination):
+    """Validate output scope without creating through an untrusted path."""
+    requested=Path(destination).expanduser()
+    # macOS exposes its temporary-directory roots through system aliases.
+    # Normalize only these fixed OS paths; arbitrary export links stay refused.
+    import sys
+    if sys.platform=='darwin' and requested.is_absolute() and len(requested.parts)>1 and requested.parts[1] in {'var','tmp','etc'}:
+        requested=Path('/private').joinpath(*requested.parts[1:])
+    if requested.is_symlink():raise UserError('Export destination must not be a symlink.')
+    path=safe_output(root,db,requested,create_parent=False)
+    # Do not let resolution authorize a different directory through a link.
+    if requested.absolute() != path:
+        raise UserError('Export destination must not contain a symlink or parent traversal.')
+    raw_companion=Path(str(path)+'.coverage.json')
+    if raw_companion.is_symlink():raise UserError('Coverage companion must not be a symlink.')
+    companion=safe_output(root,db,raw_companion,create_parent=False)
+    if path.exists() or companion.exists() or companion.is_symlink():
+        raise FileExistsError('Choose a new export filename and coverage companion.')
+    return path, companion
 
 
 def write_jsonl_export(root, db, destination, records, scope_filters=None):
     """Stream JSONL with privacy-minimal coverage; clean both new files on failure."""
-    from .core import digest
+    from .anchored_output import OutputFiles
     from .coverage_ledger import _iter_entries, portable_summary
     from .acquisition import case_coverage
     from .portable_coverage import checked_scope, bounded_json
     context_scope=checked_scope(db,scope_filters)
-    requested=Path(destination).expanduser()
-    if requested.is_symlink():raise UserError('Export destination must not be a symlink.')
-    path=safe_output(root,db,requested)
-    raw_companion=Path(str(path)+'.coverage.json')
-    if raw_companion.is_symlink():raise UserError('Coverage companion must not be a symlink.')
-    companion=safe_output(root,db,raw_companion)
-    if path.exists() or companion.exists() or companion.is_symlink():
-        raise FileExistsError('Choose a new export filename and coverage companion.')
-    created=[];count=0;eids=set();pairs=set();scope_known=scope_filters is not None
+    path, companion=paired_output_paths(root,db,destination)
+    count=0;eids=set();pairs=set();scope_known=scope_filters is not None
     scope_filters={} if scope_filters is None else scope_filters
+    outputs=OutputFiles([path,companion])
     db.execute('SAVEPOINT streaming_jsonl_export')
     try:
-        with path.open('x',encoding='utf-8') as stream:
-            created.append(path)
-            for record in records:
-                stream.write(json.dumps(record,ensure_ascii=False)+'\n')
-                count+=1
-                if record.get('evidence_id'):eids.add(record['evidence_id'])
-                if record.get('evidence_id') and record.get('logical_path'):pairs.add((record['evidence_id'],record['logical_path']))
-        acquisition=case_coverage(root,db,include_ledger=False)
-        portable=portable_summary({'entries':_iter_entries(root,db,acquisition)},
-            {'format':'jsonl','records':count,'evidence_ids':eids,'source_pairs':pairs,'truncated':False if scope_known else None,**context_scope})
-        portable['export_scope'].update(selection=('filtered' if scope_filters else 'whole-case-indexed-records') if scope_known else 'provided-record-window',
-            extent='unbounded-indexed-scope' if scope_known else 'unknown',
-            empty_result=count==0,filter_fields=sorted(scope_filters))
-        portable['export_sha256']=digest(path)
-        encoded=bounded_json(portable)
-        with companion.open('x',encoding='utf-8') as stream:
-            created.append(companion)
-            stream.write(encoded)
-        result={'path':str(path),'records':count,'coverage_path':str(companion),
-                'sha256':portable['export_sha256'],'coverage_sha256':digest(companion)}
-        audit(db,'export.created',{**result,'format':'jsonl','scope_filter_fields':sorted(scope_filters),
-                                  'independent_examiner_signoff':False})
-        db.execute('RELEASE SAVEPOINT streaming_jsonl_export')
-        return result
+        with outputs:
+            with outputs.open(path) as stream:
+                for record in records:
+                    stream.write(json.dumps(record,ensure_ascii=False)+'\n')
+                    count+=1
+                    if record.get('evidence_id'):eids.add(record['evidence_id'])
+                    if record.get('evidence_id') and record.get('logical_path'):pairs.add((record['evidence_id'],record['logical_path']))
+            acquisition=case_coverage(root,db,include_ledger=False)
+            portable=portable_summary({'entries':_iter_entries(root,db,acquisition)},
+                {'format':'jsonl','records':count,'evidence_ids':eids,'source_pairs':pairs,'truncated':False if scope_known else None,**context_scope})
+            portable['export_scope'].update(selection=('filtered' if scope_filters else 'whole-case-indexed-records') if scope_known else 'provided-record-window',
+                extent='unbounded-indexed-scope' if scope_known else 'unknown',
+                empty_result=count==0,filter_fields=sorted(scope_filters))
+            portable['export_sha256']=outputs.digest(path)
+            encoded=bounded_json(portable)
+            with outputs.open(companion) as stream:
+                stream.write(encoded)
+            result={'path':str(path),'records':count,'coverage_path':str(companion),
+                    'sha256':portable['export_sha256'],'coverage_sha256':outputs.digest(companion)}
+            outputs.publish()
+            audit(db,'export.created',{**result,'format':'jsonl','scope_filter_fields':sorted(scope_filters),
+                                      'independent_examiner_signoff':False})
+            outputs.check_parent()
+            if outputs.digest(path)!=result['sha256'] or outputs.digest(companion)!=result['coverage_sha256']:
+                raise UserError('Export changed before audit completion.')
+            db.execute('RELEASE SAVEPOINT streaming_jsonl_export')
+            return result
     except BaseException:
         db.execute('ROLLBACK TO SAVEPOINT streaming_jsonl_export')
         db.execute('RELEASE SAVEPOINT streaming_jsonl_export')
-        for item in reversed(created):item.unlink(missing_ok=True)
         raise
 
 
 def write_export(root, db, destination, format_name, records):
     if format_name == 'jsonl':
         return write_jsonl_export(root,db,destination,records)['path']
-    from .core import digest
     from .coverage_ledger import portable_summary, source_pairs
     from .acquisition import case_coverage
     from .portable_coverage import bounded_json
-    requested = Path(destination).expanduser()
-    if requested.is_symlink():
-        raise UserError('Export destination must not be a symlink.')
-    path = safe_output(root, db, requested)
-    raw_companion = Path(str(path) + '.coverage.json')
-    if raw_companion.is_symlink():
-        raise UserError('Coverage companion must not be a symlink.')
-    companion = safe_output(root, db, raw_companion)
-    if path.exists() or companion.exists():
-        raise FileExistsError('Choose a new export filename and coverage companion.')
-    created = []
+    path, companion = paired_output_paths(root, db, destination)
+    from .anchored_output import OutputFiles
+    outputs = OutputFiles([path, companion])
     db.execute('SAVEPOINT paired_export')
     try:
-        with path.open('x', encoding='utf-8', newline='') as handle:
-            created.append(path)
-            if format_name == "json":
-                handle.write(json.dumps(records, indent=2, ensure_ascii=False) + "\n")
-            else:
-                fields = ["id", "evidence_id", "category", "timestamp", "timestamp_raw", "title", "body", "logical_path", "source_ref", "source_sha256", "parser"]
-                def cell(value):
-                    value = str(value) if value is not None else ""
-                    return "'" + value if value.startswith(("=", "+", "-", "@", "\t", "\r")) else value
-                writer = csv.DictWriter(handle, fieldnames=fields)
-                writer.writeheader()
-                for record in records:
-                    writer.writerow({key: cell(record.get(key)) for key in fields})
-        coverage = portable_summary(case_coverage(root, db)['ledger'], {
-            'format': format_name, 'records': len(records), 'truncated': None,
-            'evidence_ids': [r['evidence_id'] for r in records if r.get('evidence_id')],
-            'source_pairs': source_pairs(records)})
-        coverage['export_scope'].update(selection='provided-record-window',
-            extent='unknown', truncated=None, empty_result=not records)
-        coverage['export_sha256'] = digest(path)
-        encoded = bounded_json(coverage)
-        with companion.open('x', encoding='utf-8') as handle:
-            created.append(companion)
-            handle.write(encoded)
-        audit(db, "export.created", {"path": str(path), "format": format_name,
-            "records": len(records), "coverage_path": str(companion),
-            "sha256": coverage['export_sha256'], "coverage_sha256": digest(companion),
-            "independent_examiner_signoff": False})
-        db.execute('RELEASE SAVEPOINT paired_export')
-        return str(path)
-    except BaseException:
-        try:
-            db.execute('ROLLBACK TO SAVEPOINT paired_export')
+        with outputs:
+            with outputs.open(path) as handle:
+                if format_name == "json":
+                    handle.write(json.dumps(records, indent=2, ensure_ascii=False) + "\n")
+                else:
+                    fields = ["id", "evidence_id", "category", "timestamp", "timestamp_raw", "title", "body", "logical_path", "source_ref", "source_sha256", "parser"]
+                    def cell(value):
+                        value = str(value) if value is not None else ""
+                        return "'" + value if value.startswith(("=", "+", "-", "@", "\t", "\r")) else value
+                    writer = csv.DictWriter(handle, fieldnames=fields)
+                    writer.writeheader()
+                    for record in records:
+                        writer.writerow({key: cell(record.get(key)) for key in fields})
+            coverage = portable_summary(case_coverage(root, db)['ledger'], {
+                'format': format_name, 'records': len(records), 'truncated': None,
+                'evidence_ids': [r['evidence_id'] for r in records if r.get('evidence_id')],
+                'source_pairs': source_pairs(records)})
+            coverage['export_scope'].update(selection='provided-record-window',
+                extent='unknown', truncated=None, empty_result=not records)
+            coverage['export_sha256'] = outputs.digest(path)
+            encoded = bounded_json(coverage)
+            with outputs.open(companion) as handle:
+                handle.write(encoded)
+            companion_sha = outputs.digest(companion)
+            outputs.publish()
+            audit(db, "export.created", {"path": str(path), "format": format_name,
+                "records": len(records), "coverage_path": str(companion),
+                "sha256": coverage['export_sha256'], "coverage_sha256": companion_sha,
+                "independent_examiner_signoff": False})
+            outputs.check_parent()
+            if outputs.digest(path) != coverage['export_sha256'] or outputs.digest(companion) != companion_sha:
+                raise UserError('Export changed before audit completion.')
             db.execute('RELEASE SAVEPOINT paired_export')
-        finally:
-            for item in reversed(created):
-                item.unlink(missing_ok=True)
+            return str(path)
+    except BaseException:
+        db.execute('ROLLBACK TO SAVEPOINT paired_export')
+        db.execute('RELEASE SAVEPOINT paired_export')
         raise
 
 
@@ -138,16 +147,7 @@ def write_report(root, db, destination, filters=None, preview_limit=None):
     context_scope = checked_scope(db, filters)
     if preview_limit is not None and (type(preview_limit) is not int or not 1 <= preview_limit <= 10000):
         raise UserError('Preview limit must be an integer between 1 and 10,000.')
-    requested = Path(destination).expanduser()
-    if requested.is_symlink():
-        raise UserError('Report destination must not be a symlink.')
-    path = safe_output(root, db, requested)
-    raw_companion = Path(str(path) + '.coverage.json')
-    if raw_companion.is_symlink():
-        raise UserError('Coverage companion must not be a symlink.')
-    companion = safe_output(root, db, raw_companion)
-    if path.exists() or companion.exists():
-        raise FileExistsError('Choose a new report filename and coverage companion.')
+    path, companion = paired_output_paths(root, db, destination)
     records = select_artifacts(db, limit=preview_limit + 1 if preview_limit else 100_001, **filters)
     truncated = bool(preview_limit and len(records) > preview_limit)
     if preview_limit:
@@ -229,7 +229,6 @@ def write_report(root, db, destination, filters=None, preview_limit=None):
     # Single substitution pass prevents placeholder-looking evidence from becoming markup.
     import re
     document = re.sub(r"__([A-Z]+)__", lambda match: values[match[1]], document)
-    from .core import digest
     from .coverage_ledger import portable_summary, source_pairs
     from .portable_coverage import bounded_json
     portable = portable_summary(coverage['ledger'], {
@@ -237,29 +236,30 @@ def write_report(root, db, destination, filters=None, preview_limit=None):
         'truncated': truncated, 'records': len(records),
         'evidence_ids': [r.get('evidence_id') for r in records],
         'source_pairs': source_pairs(records), **context_scope})
-    created = []
+    from .anchored_output import OutputFiles
+    outputs = OutputFiles([path, companion])
     db.execute('SAVEPOINT paired_html_report')
     try:
-        with path.open('x', encoding='utf-8') as handle:
-            created.append(path)
-            handle.write(document)
-        portable['export_sha256'] = digest(path)
-        encoded = bounded_json(portable)
-        with companion.open('x', encoding='utf-8') as handle:
-            created.append(companion)
-            handle.write(encoded)
-        audit(db, "report.created", {"path": str(path), "records": len(records),
-            "integrity_ok": integrity["ok"], "filters": filters,
-            "preview_limit": preview_limit, "truncated": truncated,
-            "coverage_path": str(companion), "sha256": portable['export_sha256'],
-            "coverage_sha256": digest(companion), "independent_examiner_signoff": False})
-        db.execute('RELEASE SAVEPOINT paired_html_report')
-        return {"path": str(path), "records": len(records), "integrity_ok": integrity["ok"], "truncated": truncated}
-    except BaseException:
-        try:
-            db.execute('ROLLBACK TO SAVEPOINT paired_html_report')
+        with outputs:
+            with outputs.open(path) as handle:
+                handle.write(document)
+            portable['export_sha256'] = outputs.digest(path)
+            encoded = bounded_json(portable)
+            with outputs.open(companion) as handle:
+                handle.write(encoded)
+            companion_sha = outputs.digest(companion)
+            outputs.publish()
+            audit(db, "report.created", {"path": str(path), "records": len(records),
+                "integrity_ok": integrity["ok"], "filters": filters,
+                "preview_limit": preview_limit, "truncated": truncated,
+                "coverage_path": str(companion), "sha256": portable['export_sha256'],
+                "coverage_sha256": companion_sha, "independent_examiner_signoff": False})
+            outputs.check_parent()
+            if outputs.digest(path) != portable['export_sha256'] or outputs.digest(companion) != companion_sha:
+                raise UserError('Report changed before audit completion.')
             db.execute('RELEASE SAVEPOINT paired_html_report')
-        finally:
-            for item in reversed(created):
-                item.unlink(missing_ok=True)
+            return {"path": str(path), "records": len(records), "integrity_ok": integrity["ok"], "truncated": truncated}
+    except BaseException:
+        db.execute('ROLLBACK TO SAVEPOINT paired_html_report')
+        db.execute('RELEASE SAVEPOINT paired_html_report')
         raise

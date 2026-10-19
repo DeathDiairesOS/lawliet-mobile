@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import csv
+import contextlib
 from .tsv import report_reader
 import json
 import os
@@ -9,6 +10,7 @@ import plistlib
 import re
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -134,27 +136,106 @@ def storage_guard(folder, max_bytes, reserve=1024**3):
     return check
 
 
+def _command_log_parent(parent, *, create):
+    """Open each directory without following user-controlled links."""
+    if not hasattr(os,'O_NOFOLLOW') or not hasattr(os,'O_DIRECTORY'):
+        raise UserError('Descriptor-anchored command logs require POSIX no-follow APIs.')
+    parent=Path(parent).absolute()
+    if '..' in parent.parts:raise UserError('Command log parent traversal is unsupported.')
+    # macOS exposes its normal temporary directories through these fixed system
+    # aliases. Resolve only the OS prefix, never the caller's remaining path.
+    if sys.platform=='darwin' and len(parent.parts)>1 and parent.parts[1] in {'var','tmp'}:
+        prefix=Path('/')/parent.parts[1]
+        expected=Path('/private')/parent.parts[1]
+        if prefix.is_symlink() and prefix.resolve()==expected:
+            parent=expected.joinpath(*parent.parts[2:])
+    flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW
+    fd=os.open(parent.anchor,flags)
+    try:
+        for part in parent.parts[1:]:
+            try:child=os.open(part,flags,dir_fd=fd)
+            except FileNotFoundError:
+                if not create:raise
+                os.mkdir(part,mode=0o700,dir_fd=fd)
+                child=os.open(part,flags,dir_fd=fd)
+            os.close(fd);fd=child
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+@contextlib.contextmanager
+def _command_logs(output):
+    """Hold the selected parent/files across spawn; never reopen by pathname.
+
+    Existing single-link regular logs retain overwrite behavior. Links and
+    special files are refused before either log is truncated. This anchors log
+    identity, not all child-created files or a privileged host filesystem.
+    """
+    paths=(output,output.with_name(output.name+'.stderr'))
+    parent_fd=_command_log_parent(output.parent,create=True)
+    files={}
+    try:
+        for path in paths:
+            fd=os.open(path.name,os.O_WRONLY|os.O_CREAT|os.O_NOFOLLOW|os.O_NONBLOCK,0o600,dir_fd=parent_fd)
+            files[path.name]=fd
+            info=os.fstat(fd)
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink!=1:
+                raise UserError('Command logs must be single-link regular files.')
+        def check():
+            current=_command_log_parent(output.parent,create=False)
+            try:
+                before,after=os.fstat(parent_fd),os.fstat(current)
+                if (before.st_dev,before.st_ino)!=(after.st_dev,after.st_ino):
+                    raise UserError('Command log directory changed during execution.')
+            finally:os.close(current)
+            for name,fd in files.items():
+                opened=os.fstat(fd)
+                linked=os.stat(name,dir_fd=parent_fd,follow_symlinks=False)
+                if not stat.S_ISREG(linked.st_mode) or linked.st_nlink!=1 or opened.st_nlink!=1 or (opened.st_dev,opened.st_ino)!=(linked.st_dev,linked.st_ino):
+                    raise UserError('Command log identity changed during execution.')
+        check()
+        for fd in files.values():os.ftruncate(fd,0)
+        with contextlib.ExitStack() as streams:
+            stdout=streams.enter_context(os.fdopen(os.dup(files[paths[0].name]),'wb'))
+            stderr=streams.enter_context(os.fdopen(os.dup(files[paths[1].name]),'wb'))
+            yield stdout,stderr,check
+    finally:
+        for fd in files.values():os.close(fd)
+        os.close(parent_fd)
+
+
 def execute(argv, output, timeout=300, cwd=None, guard=None):
-    """No shell; logs on disk; stop process groups on cancellation/timeout."""
-    output.parent.mkdir(parents=True, exist_ok=True)
+    """No shell; descriptor-anchored logs; stop groups on failure or timeout.
+
+    Protects stdout/stderr identities, not files a tool opens itself.
+    """
+    output=Path(output)
     error_path = output.with_name(output.name + ".stderr")
     started = time.monotonic()
-    with output.open("wb") as stdout, error_path.open("wb") as stderr:
+    with _command_logs(output) as (stdout,stderr,check_logs):
         from .runner_lease import spawn, stop
         child, alive = spawn(argv, cwd=cwd, stdout=stdout, stderr=stderr)
         process_status_kind = 'guardian exit status; child signal exits mapped to 128+signal' if alive is not None else 'direct child returncode'
         try:
+            check_logs()
             if guard is None:
                 returncode = child.wait(timeout=timeout)
+                check_logs()
             else:
                 while True:
+                    check_logs()
                     guard()
+                    check_logs()
                     remaining = timeout - (time.monotonic() - started)
                     if remaining <= 0:
                         raise subprocess.TimeoutExpired(argv, timeout)
                     try:
                         returncode = child.wait(timeout=min(1, remaining))
+                        check_logs()
                         guard()
+                        check_logs()
                         break
                     except subprocess.TimeoutExpired:
                         if time.monotonic() - started >= timeout:
@@ -184,6 +265,16 @@ def leapp_diagnostics(path):
                 if len(result['error_lines'])<100:result['error_lines'].append(line.strip()[:500])
             elif line.strip() in {'No file found','No files found'}:result['missing_input_notices']+=1
     return result
+
+
+def _post_tool_integrity(root, db, detail):
+    """Detect retained-case damage before indexing; this is not isolation."""
+    integrity = verify(root, db)
+    detail['post_execution_integrity'] = integrity
+    if not integrity['ok']:
+        raise UserError('Case integrity check failed after external tool execution; '
+                        'output was not indexed. Preserve the case and inspect retained '
+                        'diagnostics before retrying. This check does not prevent tool access.')
 
 
 def _report_schema(reports):
@@ -248,35 +339,59 @@ def external_analyze(root, db, workspace, evidence_id, engine, timeout=900):
         return _external_analyze_owned(root, db, workspace, evidence_id, engine, timeout)
 
 
+def configure_exiftool_container(workspace, image, tool_root, socket, docker):
+    from .container_runner import validate_config
+    cfg = validate_config({'image': image, 'tool_root': tool_root, 'socket': socket, 'docker': docker})
+    settings = configuration(workspace)
+    previous = settings.get('exiftool', {})
+    entry = dict(previous) if isinstance(previous, dict) else {'path': previous}
+    entry['path'] = str(Path(cfg['tool_root'])/'bin/exiftool')
+    entry['container'] = cfg
+    settings['exiftool'] = entry
+    config_path(workspace).write_text(json_text(settings)+'\n')
+    return {'tool': 'exiftool', 'container': cfg, 'scope': 'Opt-in qualified ExifTool profile only; no image download or host fallback.'}
+
+
 def _external_analyze_owned(root, db, workspace, evidence_id, engine, timeout=900):
     evidence = db.execute("SELECT * FROM evidence WHERE id=?", (evidence_id,)).fetchone()
     if not evidence:
         raise UserError(f"Unknown evidence: {evidence_id}")
     if evidence["encrypted"]:
-        raise UserError("This adapter requires a decrypted extraction; encrypted-backup credentials are not accepted in process arguments.")
+        from .analysis_refusal import refuse_encrypted
+        refuse_encrypted(db, evidence_id, engine,
+                         "This adapter requires a decrypted extraction; encrypted-backup credentials are not accepted in process arguments.")
     expected = {"ileapp": "ios", "aleapp": "android"}.get(engine)
     if expected and evidence["platform"] not in {expected, "unknown"}:
         raise UserError(f"{engine} does not match this evidence platform ({evidence['platform']}).")
     if not verify(root, db)["ok"]:
         raise UserError("Evidence integrity check failed; run verify.")
     cmd = command(workspace, engine)
+    entry = configuration(workspace).get(engine)
+    container_cfg = entry.get('container') if engine == 'exiftool' and isinstance(entry, dict) else None
+    if container_cfg is not None:
+        from .container_runner import validate_config
+        container_cfg = validate_config(container_cfg)
     executable_sha256 = digest(cmd[-1])
     previous = db.execute("SELECT id,detail FROM runs WHERE evidence_id=? AND engine=? AND status='complete' ORDER BY rowid DESC LIMIT 1", (evidence_id, engine)).fetchone()
     run_id = uuid.uuid4().hex[:12]
-    output = root / "runs" / run_id
-    output.mkdir(parents=True)
+    from .container_runner import create_run_directory
+    output = create_run_directory(root, run_id)
     from .runner_lease import ownership
     owner = ownership()
-    db.execute("INSERT INTO runs(id,evidence_id,engine,started_at,status,detail) VALUES(?,?,?,?,?,?)", (run_id, evidence_id, engine, now(), "running", json_text({'runner_ownership': owner})))
+    initial_detail = {'runner_ownership': owner}
+    if container_cfg is not None:
+        from .container_runner import labels as container_labels
+        initial_detail.update(container_config=container_cfg,container_labels=container_labels(root,run_id,owner))
+    db.execute("INSERT INTO runs(id,evidence_id,engine,started_at,status,detail) VALUES(?,?,?,?,?,?)", (run_id, evidence_id, engine, now(), "running", json_text(initial_detail)))
     begin_run_index(db,run_id)
     from .runtime_context import snapshot as runtime_snapshot
     runtime = runtime_snapshot()
-    audit(db, "analysis.started", {"run_id": run_id, "engine": engine, "evidence_id": evidence_id, "executable_sha256": executable_sha256, "runtime_context": runtime, "runner_ownership": owner})
+    audit(db, "analysis.started", {"run_id": run_id, "engine": engine, "evidence_id": evidence_id, "executable_sha256": executable_sha256, "runtime_context": runtime, **initial_detail})
     db.commit()
     count, status, detail = 0, "failed", {}
     db.execute("SAVEPOINT adapter_records")
     try:
-        with tempfile.TemporaryDirectory(prefix="lawliet-adapter-") as tmp:
+        with tempfile.TemporaryDirectory(prefix="lawliet-adapter-", dir=output if container_cfg is not None else None) as tmp:
             input_path = Path(tmp) / "input"
             shutil.copytree(root / "evidence" / evidence_id, input_path)
             report_dir = output / "output"
@@ -293,6 +408,7 @@ def _external_analyze_owned(root, db, workspace, evidence_id, engine, timeout=90
                                  guard=storage_guard(output, _EXTERNAL_OUTPUT_MAX_BYTES, reserve=_EXTERNAL_OUTPUT_RESERVE_BYTES))
                 if detail["returncode"] != 0:
                     raise UserError(f"{engine} exited {detail['returncode']}. See {detail['stderr']}.")
+                _post_tool_integrity(root, db, detail)
                 detail["diagnostics"]=leapp_diagnostics(output / "stdout.log")
                 detail["reports"]=[]
                 for tsv in sorted(report_dir.rglob("*.tsv")):
@@ -330,10 +446,16 @@ def _external_analyze_owned(root, db, workspace, evidence_id, engine, timeout=90
                             metadata_input = input_path / 'photos'
                     except (ValueError, OSError):
                         pass
-                detail = execute(cmd + ["-json", "-r", "-n", str(metadata_input)], output / "metadata.json", timeout,
-                                 guard=storage_guard(output, _EXTERNAL_OUTPUT_MAX_BYTES, reserve=_EXTERNAL_OUTPUT_RESERVE_BYTES))
+                guard = storage_guard(output, _EXTERNAL_OUTPUT_MAX_BYTES, reserve=_EXTERNAL_OUTPUT_RESERVE_BYTES)
+                if container_cfg is not None:
+                    from .container_runner import run_exiftool
+                    detail = run_exiftool(root, run_id, owner, container_cfg, metadata_input,
+                                          output / 'metadata.json', timeout, guard)
+                else:
+                    detail = execute(cmd + ["-json", "-r", "-n", str(metadata_input)], output / "metadata.json", timeout, guard=guard)
                 if detail["returncode"] != 0:
                     raise UserError(f"ExifTool exited {detail['returncode']}. See {detail['stderr']}.")
+                _post_tool_integrity(root, db, detail)
                 if (output / "metadata.json").stat().st_size > 128 * 1024**2:
                     raise UserError("ExifTool JSON exceeds 128 MiB; select a smaller media extraction.")
                 source_files = {r["path"]: r for r in db.execute("SELECT * FROM files WHERE evidence_id=?", (evidence_id,))}
@@ -359,6 +481,8 @@ def _external_analyze_owned(root, db, workspace, evidence_id, engine, timeout=90
         raise
     finally:
         detail['runner_ownership'] = owner
+        if container_cfg is not None:
+            detail.update(container_config=container_cfg,container_labels=initial_detail['container_labels'])
         detail['executable_sha256'] = executable_sha256
         detail['drift'] = _parser_drift(previous, executable_sha256, detail.get('reports'), complete=status == 'complete')
         detail['runtime_context'] = runtime
@@ -366,9 +490,13 @@ def _external_analyze_owned(root, db, workspace, evidence_id, engine, timeout=90
                                      'free_space_reserve_bytes': _EXTERNAL_OUTPUT_RESERVE_BYTES,
                                      'timeout_seconds': timeout,
                                      'enforcement': 'Periodic process-group stop; output can overshoot between checks. Not a filesystem or memory sandbox.'}
+        if container_cfg is not None:
+            detail['resource_policy'].update(memory_bytes=64*1024**2, pids_limit=16, cpus=0.25,
+                parser_stdout_ceiling_bytes=128*1024**2, network='none', input_mount='readonly',
+                enforcement='Container kernel memory/PID/CPU/filesystem/network limits; bounded host stdout; periodic host storage guard. Trusted controller has local daemon access.')
         db.execute("RELEASE adapter_records")
         db.execute("UPDATE runs SET finished_at=?,status=?,records=?,detail=? WHERE id=?", (now(), status, count, json_text(detail), run_id))
-        audit(db, "analysis.finished", {"run_id": run_id, "status": status, "new_records": count})
+        audit(db, "analysis.finished", {"run_id": run_id, "status": status, "new_records": count, **({"container": detail.get("container")} if container_cfg is not None else {})})
         db.commit()
     return {"run_id": run_id, "engine": engine, "status": status, "new_records": count, "detail": detail}
 

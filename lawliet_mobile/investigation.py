@@ -192,7 +192,7 @@ def verify_ledger(db):
         if row['previous_hash'] != previous or row['hash'] != expected:
             raise UserError('Investigation verification: audit chain mismatch.')
         previous = row['hash']
-        if row['action'] not in ('investigation.created', 'investigation.note', 'investigation.action'):
+        if row['action'] not in ('investigation.created', 'investigation.note', 'investigation.action', 'investigation.examination'):
             continue
         try:
             receipt = json.loads(row['detail'])
@@ -227,6 +227,9 @@ def verify_ledger(db):
             request, result = json.loads(row['request']), json.loads(row['result'])
             if action == 'investigation.note':
                 valid = (row['kind'] == 'analyst.' + request['kind'] and
+                         receipt['sha256'] == checksum([request, result]))
+            elif action == 'investigation.examination':
+                valid = (row['kind'] == 'examination.summary' and
                          receipt['sha256'] == checksum([request, result]))
             else:
                 valid = (row['kind'] == 'tool.completed' and receipt['tool'] == request['tool'] and

@@ -377,9 +377,17 @@ def media_group_key():
 
 def iter_artifacts(db, query=None, category=None, evidence=None, since=None, until=None, limit=100,
                    app=None, conversation=None, participant=None, offset=0, parser=None, run=None, report=None,
-                   sort_field=None, sort_direction="asc", sort_mode="text", phone_query=None, media_items=False, media_state=None, view_group=None):
+                   sort_field=None, sort_direction="asc", sort_mode="text", phone_query=None, media_items=False, media_state=None, view_group=None,
+                   evidence_ids=None):
     db.create_function('casefold', 1, lambda value: str(value or '').casefold(), deterministic=True)
     clauses, args = [], []
+    if evidence_ids is not None:
+        if (not isinstance(evidence_ids, (list, tuple)) or len(evidence_ids) > 100
+                or any(not isinstance(value, str) or not 1 <= len(value) <= 128 for value in evidence_ids)):
+            raise UserError('Select at most 100 explicit evidence identifiers.')
+        # An empty authorization scope must never fall back to all case evidence.
+        clauses.append('a.evidence_id IN (' + ','.join('?' for _ in evidence_ids) + ')' if evidence_ids else '0')
+        args.extend(evidence_ids)
     if view_group:
         if view_group != 'browser':
             raise UserError('Unsupported evidence view group.')

@@ -21,8 +21,8 @@
       "url": "https://github.com/calebevans/mulder.git",
       "commit": "5321847887fe1fcb5399cec0a1703db9c513bac8",
       "patch": "integrations/mulder/lawliet.patch",
-      "patch_sha256": "b20bb047587b3e29c8f6347775cb9cfddc86cda8c433cfa9f829fbf13dd7ef30",
-      "patched_diff_sha256": "3cd2c204b7d4496e65ad30c3a401a65104911ebf19bfa773fc01358e954822a0"
+      "patch_sha256": "b1620d3b73291974ef51063abadd262f6447fabbf62f6727fc87f97225f2c2e3",
+      "patched_diff_sha256": "b1620d3b73291974ef51063abadd262f6447fabbf62f6727fc87f97225f2c2e3"
     },
     "aleapp": {
       "url": "https://github.com/abrignoni/ALEAPP.git",

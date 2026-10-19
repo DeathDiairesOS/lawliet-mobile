@@ -12,7 +12,7 @@ from .core import UserError, audit, now, select_artifacts, json_text
 
 STATE_AXIS = {'requested':'acquisition','collected':'acquisition','excluded':'acquisition',
               'inaccessible':'acquisition','collection-unresolved':'acquisition','unsupported':'parsing','parser-failed':'parsing',
-              'parsed':'parsing','unresolved':'parsing','reviewed':'review',
+              'parsed':'parsing','parsed-empty':'parsing','unresolved':'parsing','reviewed':'review',
               'verified':'examiner-verification','searched-with-no-finding':'search',
               'decryption-succeeded':'decryption','decryption-failed':'decryption'}
 DIMENSIONS=('source','category','profile','schema','input_tier','tool_version','device_build','device_state','validation_basis')
@@ -34,6 +34,10 @@ EXPECTED_REASONS = frozenset({'expected_file_not_in_inventory', 'expected_file_m
 
 class _ExpectedSourceGap(dict):
     """In-memory provenance marker; only the audited inventory projection emits it."""
+
+
+class _EncryptedInputRefusal(dict):
+    """Typed projection of the controlled preflight refusal, never evidence prose."""
 
 
 def _verify_audit(db):
@@ -103,16 +107,21 @@ def _iter_entries(root, db, acquisition=None):
         except (ValueError,TypeError):detail={'error':'Unreadable retained run details.'}
         if not isinstance(detail,dict):detail={'error':'Unsupported retained run detail shape.'}
         if run['status'] in {'failed','interrupted','partial'} or detail.get('error'):
-            yield _entry('decryption-failed' if 'decrypt' in run['engine'].lower() else 'parser-failed',str(detail.get('error') or 'Run '+run['status']+'; inspect retained diagnostics.'),**common)
+            entry = _entry('decryption-failed' if 'decrypt' in run['engine'].lower() else 'parser-failed',str(detail.get('error') or 'Run '+run['status']+'; inspect retained diagnostics.'),**common)
+            from .analysis_refusal import ENCRYPTED_INPUT
+            if detail.get('preflight_refusal') == ENCRYPTED_INPUT and detail.get('execution_started') is False:
+                entry = _EncryptedInputRefusal(entry, reason_code=ENCRYPTED_INPUT,
+                                              execution_started=False)
+            yield entry
         if 'decrypt' in run['engine'].lower() and run['status']=='complete':yield _entry('decryption-succeeded','Decryption run completed; parsing and examiner verification remain independent.',**common)
         for item in detail.get('errors',[]):
             item=item if isinstance(item,dict) else {'error':str(item)}
             yield _entry('decryption-failed' if 'decrypt' in run['engine'].lower() else 'parser-failed',str(item.get('error') or item.get('reason') or item),**{**common,'source':item.get('source',common['source']),'scope_level':'source' if item.get('source') else 'run'})
         for item in detail.get('unparsed_candidates',[]):
             if not isinstance(item,dict):continue
-            state = 'unsupported' if item.get('state') == 'unsupported' else 'unresolved'
+            state = item['state'] if item.get('state') in {'unsupported', 'parsed-empty'} else 'unresolved'
             dimensions = {key:item[key] for key in DIMENSIONS if key in item}
-            observations = {key:item[key] for key in ('table','rows_observed','count_state') if key in item}
+            observations = {key:item[key] for key in ('table','rows_observed','count_state','records') if key in item}
             yield _entry(state,str(item.get('reason') or 'Parser support/emptiness not established.'),
                          **{**common,**dimensions,**observations,'source':item.get('source',common['source']),'scope_level':'source'})
     acquisition=acquisition or {}

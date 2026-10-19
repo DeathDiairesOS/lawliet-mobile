@@ -21,6 +21,27 @@ class RedactionTests(unittest.TestCase):
    eid=import_evidence(root,db,other,'unknown')[0];inv.create(db,'WRONG_CASE_CANARY objective',[eid])
   self.original={str(p):digest(p) for p in Path(self.draft['path']).iterdir()};self.original[str(source)]=digest(source)
  def create(self,root,db):return m.create_redacted_customer_draft(root,db,self.draft['draft_id'],CANARIES)
+ def test_derivative_heading_distinguishes_current_status_from_source_labels(self):
+  with connect(self.ws,'A') as (root,db):
+   result=self.create(root,db);text=(Path(result['path'])/'report.txt').read_text()
+   self.assertTrue(text.startswith('LAWLIET — SELECTED-LITERAL REDACTED REPORT DRAFT\n\nUNREVIEWED /'))
+   self.assertIn('REFERENCES ONLY',text)
+   self.assertIn('Only operator-selected case-sensitive literals were removed.',text)
+   context=text.index('SOURCE DRAFT TEXT — inherited labels below')
+   self.assertGreater(text.index('DRAFT / UNREVIEWED / UNREDACTED'),context)
+   self.assertIn('DRAFT / UNREVIEWED / UNREDACTED',(Path(self.draft['path'])/'report.txt').read_text())
+  self.unchanged()
+ def test_selected_literal_in_new_heading_is_removed_too(self):
+  with connect(self.ws,'A') as (root,db):
+   result=m.create_redacted_customer_draft(root,db,self.draft['draft_id'],['LAWLIET'])
+   folder=Path(result['path']);self.assertNotIn('LAWLIET',(folder/'report.txt').read_text())
+   m._redaction_scan({p.name:p.read_text() for p in folder.iterdir()},['LAWLIET'])
+  self.unchanged()
+ def test_heading_only_match_cannot_create_a_false_redaction_success(self):
+  with connect(self.ws,'A') as (root,db):
+   with self.assertRaises(UserError):m.create_redacted_customer_draft(root,db,self.draft['draft_id'],['SOURCE DRAFT TEXT'])
+   self.assertFalse((root/'customer-redacted-drafts').exists())
+  self.unchanged()
  def unchanged(self):self.assertEqual({p:digest(Path(p)) for p in self.original},self.original)
  def test_full_surface_scan_counts_and_links_originals_unchanged(self):
   with connect(self.ws,'A') as (root,db):
@@ -116,8 +137,8 @@ class RedactionTests(unittest.TestCase):
   with connect(self.ws,'A') as (root,db):
    with patch('subprocess.run',side_effect=subprocess.TimeoutExpired('test',6)),self.assertRaises(UserError):self.create(root,db)
    original=m._redaction_worker
-   def changed(*args):
-    result=original(*args);p=Path(self.draft['path'])/'report.txt';p.write_text(p.read_text()+' drift');return result
+   def changed(*args,**kwargs):
+    result=original(*args,**kwargs);p=Path(self.draft['path'])/'report.txt';p.write_text(p.read_text()+' drift');return result
    with patch.object(m,'_redaction_worker',side_effect=changed),self.assertRaises(UserError):self.create(root,db)
    self.assertFalse((root/'customer-redacted-drafts').exists())
  def test_release_audit_failure_cleans_new_copy_and_preserves_draft(self):

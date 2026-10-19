@@ -9,6 +9,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lawliet_mobile.core import UserError, audit, connect, create_case, digest
+from lawliet_mobile.anchored_output import OutputFiles
 from lawliet_mobile.report import write_export
 
 
@@ -90,7 +91,7 @@ class ExportPairIntegrityTests(unittest.TestCase):
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM audit').fetchone()[0], before)
 
     def test_partial_companion_write_failure_removes_pair(self):
-        original = Path.open
+        original = OutputFiles.open
         class FailingWriter:
             def __init__(self, handle): self.handle = handle
             def __enter__(self): return self
@@ -98,16 +99,17 @@ class ExportPairIntegrityTests(unittest.TestCase):
             def write(self, data):
                 self.handle.write(data[:10])
                 raise OSError('injected partial write')
-        def opening(path, *args, **kwargs):
-            handle = original(path, *args, **kwargs)
-            return FailingWriter(handle) if str(path).endswith('.coverage.json') and args[0] == 'x' else handle
+        def opening(outputs, path):
+            handle = original(outputs, path)
+            return FailingWriter(handle) if str(path).endswith('.coverage.json') else handle
         with connect(self.base / 'cases', 'A') as (root, db):
             for fmt in ('json', 'csv'):
                 path = self.base / fmt
-                with patch.object(Path, 'open', opening), self.assertRaises(OSError):
+                with patch.object(OutputFiles, 'open', opening), self.assertRaises(OSError):
                     write_export(root, db, path, fmt, [])
                 self.assertFalse(path.exists())
                 self.assertFalse(Path(str(path) + '.coverage.json').exists())
+                self.assertEqual(list(self.base.glob('.lawliet-export-*')), [])
 
     def test_serialization_failure_removes_output(self):
         with connect(self.base / 'cases', 'A') as (root, db):

@@ -15,13 +15,37 @@ from pathlib import Path
 from .core import begin_run_index, UserError, add_artifact, audit, json_text, now, verify
 from .messages import metadata, scope_message, telephony_records, ios_event_markers
 
-VERSION = "native/0.1.9"
+VERSION = "native/0.1.12"
+MAX_SQLITE_VALUE_BYTES = 8 * 1024**2
+
+
+def _integer_time(value):
+    if type(value) is int:
+        return value
+    if isinstance(value, str) and re.fullmatch(r'[+-]?[0-9]+', value.strip()):
+        try:
+            return int(value)
+        except ValueError:
+            return None
+    return None
+
+
+def _rounded_microseconds(value, unit):
+    if unit == "nanoseconds":
+        whole, remainder = divmod(value, 1000)
+        return whole + int(remainder > 500 or (remainder == 500 and whole % 2 != 0))
+    return value * (1000 if unit == "milliseconds" else 1_000_000)
 
 
 def timestamp(value, epoch="unix", unit="seconds"):
     if value is None or value == "":
         return None
     try:
+        integer = _integer_time(value)
+        if integer is not None:
+            base = datetime(2001, 1, 1, tzinfo=timezone.utc) if epoch == "apple" else datetime(1970, 1, 1, tzinfo=timezone.utc)
+            parsed = base + timedelta(microseconds=_rounded_microseconds(integer, unit))
+            return parsed.isoformat(timespec="microseconds").replace("+00:00", "Z") if 1990 <= parsed.year <= 2200 else None
         if isinstance(value, str):
             try:
                 value = float(value)
@@ -114,6 +138,37 @@ def android_residual_coverage(input_db, logical_path):
         yield item
 
 
+def browser_download_residual_coverage(input_db, logical_path):
+    """Bounded presence observations, not decoding or download-history claims."""
+    names = tables(input_db)
+    if not ('urls' in names
+            and {'id', 'url', 'last_visit_time'} <= columns(input_db, 'urls')):
+        return
+    for name in ('downloads', 'downloads_url_chains'):
+        if name not in names:
+            continue
+        item = {'source': logical_path, 'table': name, 'state': 'unsupported',
+                'category': 'browser', 'schema': 'chromium-url-download-omission/1',
+                'rows_observed': None, 'count_state': 'unknown',
+                'reason': f'Table {name} is retained but is not decoded by the native browser parser. '
+                          'URL/visit output does not establish download coverage or local/synced/webview origin. '
+                          'Table names and row presence do not establish a completed download, available file bytes, '
+                          'deliberate user activity or device completeness.'}
+        try:
+            # Fixed known names, no column values or aggregate/table-sized scan.
+            present = input_db.execute(f'SELECT 1 FROM "{name}" LIMIT 1').fetchone() is not None
+            item['rows_observed'] = None if present else 0
+            item['count_state'] = ('nonempty_in_supplied_sqlite_view' if present
+                                   else 'empty_in_supplied_sqlite_view')
+            item['reason'] += (' At least one table row observed; exact count not measured.' if present
+                               else ' Zero rows observed in this supplied table; no device-absence conclusion.')
+        except sqlite3.DatabaseError:
+            # Do not copy schema/error prose or table cell contents into diagnostics.
+            item['count_state'] = 'presence_probe_unavailable'
+            item['reason'] += ' Table presence probe unavailable; no empty-table conclusion.'
+        yield item
+
+
 def parse_database(input_db, logical_path):
     names = tables(input_db)
     path = logical_path.lower()
@@ -144,6 +199,17 @@ def parse_database(input_db, logical_path):
             raw = get(row, "date", default=None)
             # Modern iOS SMS uses Apple-epoch nanoseconds; older schemas use seconds.
             unit = "nanoseconds" if raw is not None and abs(float(raw)) > 100_000_000_000 else "seconds"
+            integer = _integer_time(raw)
+            normalized_time = timestamp(raw, 'apple', unit)
+            row['timestamp_conversion'] = {
+                'source_field': 'date', 'epoch': '2001-01-01T00:00:00Z',
+                'selected_unit': unit, 'unit_selection': 'Existing magnitude heuristic; not a verified schema version.',
+                'normalized_resolution': 'microsecond',
+                'normalization_status': 'normalized' if normalized_time is not None else 'unavailable',
+                'method': 'unavailable' if raw is None else 'exact_integer_nearest_microsecond_ties_even' if integer is not None else 'floating_point_approximation',
+                'limitation': 'Stored time field, not independently verified sent, received, read or human activity time. Numeric unit does not establish measurement accuracy.'}
+            if integer is not None and unit == 'nanoseconds':
+                row['timestamp_conversion']['source_minus_normalized_nanoseconds'] = integer - _rounded_microseconds(integer, unit) * 1000
             contact = handles.get(get(row, "handle_id"), "unknown")
             # Only SQLite INTEGER 0/1 qualify. Do not coerce text, REAL,
             # NULL, absent fields or other integers into participant roles.
@@ -161,7 +227,7 @@ def parse_database(input_db, logical_path):
             title = f"{get(row, 'service', default='SMS')} · {direction} · {contact}"
             if rich_event['state'] == 'not_decoded':
                 title = 'Undecoded message event · ' + title
-            yield "messages", timestamp(raw, "apple", unit), raw, title, get(row, "text"), f"message:rowid={get(row, '__rowid__', default='unknown')}", row
+            yield "messages", normalized_time, raw, title, get(row, "text"), f"message:rowid={get(row, '__rowid__', default='unknown')}", row
     if "sms" in names and "body" in columns(input_db, "sms"):
         for row in records(input_db, "sms"):
             raw = get(row, "date", default=None)
@@ -214,6 +280,17 @@ def parse_database(input_db, logical_path):
 
 
 def native_analyze(root, db, evidence_id):
+    from .runner_lease import lease
+    with lease(root, db):
+        from .native_container import configured,analyze
+        cfg=configured(root)
+        import os
+        if os.environ.get('LAWLIET_MCP_PROFILE')=='native-container' and cfg is None:raise UserError('Native container endpoint requires isolation; no host fallback.')
+        if cfg is not None:return analyze(root,db,evidence_id,cfg)
+        return _native_analyze_owned(root, db, evidence_id)
+
+
+def _native_preflight(root, db, evidence_id):
     evidence = db.execute("SELECT * FROM evidence WHERE id=?", (evidence_id,)).fetchone()
     if not evidence:
         raise UserError(f"Unknown evidence: {evidence_id}")
@@ -229,15 +306,28 @@ def native_analyze(root, db, evidence_id):
                         'retained imported bytes are unchanged. Supply a separately scoped supported extraction or report. '
                         'This filename guard does not identify or decode proprietary formats.')
     if evidence["encrypted"]:
-        raise UserError("Encrypted iOS backup detected. Import a decrypted working extraction; native parsing does not decrypt backups.")
+        from .analysis_refusal import refuse_encrypted
+        refuse_encrypted(db, evidence_id, VERSION,
+                         "Encrypted iOS backup detected. Import a decrypted working extraction; native parsing does not decrypt backups.")
     integrity = verify(root, db)
     if not integrity["ok"]:
         raise UserError("Evidence integrity check failed. Run verify for details.")
+    return evidence
+
+
+def _native_analyze_owned(root, db, evidence_id):
+    evidence=_native_preflight(root,db,evidence_id)
+    from .runner_lease import ownership
+    owner = ownership()
     run_id, started = uuid.uuid4().hex[:12], now()
-    db.execute("INSERT INTO runs(id,evidence_id,engine,started_at,status) VALUES(?,?,?,?,?)", (run_id, evidence_id, VERSION, started, "running"))
-    begin_run_index(db,run_id)
-    audit(db, "analysis.started", {"run_id": run_id, "evidence_id": evidence_id, "engine": VERSION})
-    db.commit()
+    try:
+        db.execute("INSERT INTO runs(id,evidence_id,engine,started_at,status,detail) VALUES(?,?,?,?,?,?)", (run_id, evidence_id, VERSION, started, "running", json_text({'runner_ownership': owner})))
+        begin_run_index(db,run_id)
+        audit(db, "analysis.started", {"run_id": run_id, "evidence_id": evidence_id, "engine": VERSION, "runner_ownership": owner})
+        db.commit()
+    except BaseException:
+        db.rollback()
+        raise
     count, supported, sqlite_files, errors = 0, 0, 0, []
     unparsed_candidates = []
     file_rows = list(db.execute("SELECT * FROM files WHERE evidence_id=? ORDER BY path", (evidence_id,)))
@@ -256,12 +346,15 @@ def native_analyze(root, db, evidence_id):
                             scope_message(data, evidence_id, str(Path(source["logical_path"]).parent))
                             count += add_artifact(db, evidence_id, source["id"], category, when, raw, title, body, reference, VERSION, data, run_id=run_id)
                     except Exception as exc:
+                        if (getattr(exc, 'sqlite_errorcode', 0) or 0) & 0xff == sqlite3.SQLITE_FULL:
+                            raise
                         errors.append({"source": source["logical_path"], "error": str(exc)})
                     continue
                 if Path(source['logical_path']).suffix.lower()=='.xml':
                     try:
-                        from .xml_backup import xml_backup_records
+                        from .xml_backup import xml_backup_records, xml_coverage
                         parsed=xml_backup_records(path)
+                        unparsed_candidates.extend(xml_coverage(parsed,source['logical_path']))
                         for category, when, raw, title, body, reference, data in parsed:
                             scope_message(data,evidence_id,source['logical_path'])
                             count += add_artifact(db,evidence_id,source['id'],category,when,raw,title,body,reference,VERSION,data,run_id=run_id)
@@ -325,12 +418,15 @@ def native_analyze(root, db, evidence_id):
                 try:
                     with closing(sqlite3.connect(work.as_uri() + "?mode=ro", uri=True)) as input_db:
                         input_db.row_factory = sqlite3.Row
+                        input_db.setlimit(sqlite3.SQLITE_LIMIT_LENGTH,
+                                          min(input_db.getlimit(sqlite3.SQLITE_LIMIT_LENGTH), MAX_SQLITE_VALUE_BYTES))
                         input_db.execute("PRAGMA query_only=ON")
                         # Bound work on malformed/hostile schemas and huge joins.
                         deadline = time.monotonic() + 60
                         input_db.set_progress_handler(lambda: 1 if time.monotonic() > deadline else 0, 10000)
                         from .android_mms import decode as decode_android_mms
                         mms_rows, mms_limits, mms_supported = decode_android_mms(input_db, source['logical_path'], file_rows, evidence['platform'])
+                        unparsed_candidates.extend(browser_download_residual_coverage(input_db, source['logical_path']))
                         residual = list(android_residual_coverage(input_db, source['logical_path']))
                         unparsed_candidates.extend(item for item in residual if not mms_supported or item.get('table') not in {'pdu','part','addr'})
                         if not mms_supported and residual and mms_limits:
@@ -364,12 +460,23 @@ def native_analyze(root, db, evidence_id):
                                 data["sqlite_wal_coverage"] = wal_limit
                             file_count += 1
                             count += add_artifact(db, evidence_id, source["id"], category, when, raw, title, body, reference, VERSION, data, run_id=run_id)
+                        if not file_count:
+                            from .empty_schema import no_record_diagnostic
+                            unparsed_candidates.append(no_record_diagnostic(input_db, source['logical_path'], evidence['platform']))
                     supported += int(file_count > 0)
-                    if not file_count:
-                        unparsed_candidates.append({'source': source['logical_path'], 'state': 'no_native_records',
-                            'reason': 'No baseline records emitted; database may be empty or its schema unsupported. Consider the platform LEAPP engine.'})
                 except (sqlite3.DatabaseError, ValueError, TypeError, OverflowError) as exc:
-                    errors.append({"source": source["logical_path"], "error": str(exc)})
+                    if (getattr(exc, 'sqlite_errorcode', 0) or 0) & 0xff == sqlite3.SQLITE_FULL:
+                        # SQLITE_FULL may have rolled back the entire artifact
+                        # transaction. It is a job storage failure, not a bad
+                        # input source that can safely be skipped.
+                        raise
+                    error = {"source": source["logical_path"], "error": str(exc)}
+                    if (getattr(exc, 'sqlite_errorcode', 0) or 0) & 0xff == sqlite3.SQLITE_TOOBIG:
+                        error.update(error=f'Native SQLite value or encoded row exceeds the {MAX_SQLITE_VALUE_BYTES}-byte processing limit; source coverage incomplete.',
+                                     sqlite_error=str(exc), state='resource-limited',
+                                     reason='Native SQLite value or encoded row exceeds the declared byte limit; source coverage incomplete.',
+                                     max_value_or_encoded_row_bytes=MAX_SQLITE_VALUE_BYTES)
+                    errors.append(error)
                 finally:
                     if wal_limit:
                         for affected_category in sorted(file_categories or {'unknown'}):
@@ -381,19 +488,36 @@ def native_analyze(root, db, evidence_id):
         from .media import index_media
         count += index_media(root, db, evidence_id, file_rows, VERSION, run_id=run_id)
         status = "partial" if errors else "complete"
-        detail = {"sqlite_files_examined": sqlite_files, "databases_with_records": supported, "errors": errors,
+        detail = {"runner_ownership": owner, "sqlite_files_examined": sqlite_files, "databases_with_records": supported, "errors": errors,
+                  "sqlite_resource_policy": {"max_value_or_encoded_row_bytes": MAX_SQLITE_VALUE_BYTES,
+                                             "scope": "Per-source SQLite text/BLOB/encoded-row limit; not a process memory or complete job time limit."},
                   "unparsed_candidates": unparsed_candidates,
                   "coverage": "Native baseline parsers only. Zero records does not prove absence of activity."}
     except BaseException as exc:
+        discarded = count if not db.in_transaction else 0
+        if discarded:
+            count = 0
         status = "interrupted" if isinstance(exc, KeyboardInterrupt) else "failed"
-        detail = {"error": str(exc)}
-        db.execute("UPDATE runs SET finished_at=?,status=?,records=?,detail=? WHERE id=?", (now(), status, count, json_text(detail), run_id))
-        audit(db, "analysis.finished", {"run_id": run_id, "status": status, "records": count})
-        db.commit()
+        detail = {"error": str(exc), "runner_ownership": owner}
+        if discarded:
+            detail['discarded_uncommitted_records'] = discarded
+        if isinstance(exc, sqlite3.Error):
+            detail['sqlite_errorcode'] = getattr(exc, 'sqlite_errorcode', None)
+        try:
+            db.execute("UPDATE runs SET finished_at=?,status=?,records=?,detail=? WHERE id=?", (now(), status, count, json_text(detail), run_id))
+            audit(db, "analysis.finished", {"run_id": run_id, "status": status, "records": count})
+            db.commit()
+        except BaseException:
+            db.rollback()
+            raise
         raise
-    db.execute("UPDATE runs SET finished_at=?,status=?,records=?,detail=? WHERE id=?", (now(), status, count, json_text(detail), run_id))
-    audit(db, "analysis.finished", {"run_id": run_id, "status": status, "new_records": count, **detail})
-    db.commit()
+    try:
+        db.execute("UPDATE runs SET finished_at=?,status=?,records=?,detail=? WHERE id=?", (now(), status, count, json_text(detail), run_id))
+        audit(db, "analysis.finished", {"run_id": run_id, "status": status, "new_records": count, **detail})
+        db.commit()
+    except BaseException:
+        db.rollback()
+        raise
     return {"run_id": run_id, "engine": VERSION, "status": status, "new_records": count, **detail}
 
 

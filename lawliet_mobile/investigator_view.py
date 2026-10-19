@@ -3,12 +3,37 @@ import json
 import re
 from decimal import Decimal
 from .report_sort import sort_value
-from .core import UserError, select_artifacts
+from .core import UserError, select_artifacts, iter_artifacts
 from .phone_search import phone_digits
 
-VERSION = 'investigator-view/1'
+VERSION = 'investigator-view/2'
 MAX_RECORDS = 100000
 MAX_BYTES = 128 * 1024**2
+
+
+def _bounded_iter(db, selection, kind):
+    """Bound retained full-record JSON while streaming, not just metadata.
+
+    One SQLite row must still be decoded before it can be measured. This is a
+    presentation input budget, not an OS/process memory or query-time limit.
+    """
+    consumed = 0
+    encoder = json.JSONEncoder(ensure_ascii=False)
+    for count, row in enumerate(iter_artifacts(db, limit=MAX_RECORDS + 1, **selection)):
+        if count >= MAX_RECORDS:
+            raise UserError(kind + ' presentation exceeds the bounded review record budget. Narrow the source scope or use Source records.')
+        try:
+            for chunk in encoder.iterencode(row):
+                consumed += len(chunk.encode('utf-8'))
+                if consumed > MAX_BYTES:
+                    raise UserError(kind + ' presentation exceeds the bounded full-record review byte budget. Narrow the source scope or use Source records.')
+        except (ValueError, TypeError, RecursionError) as exc:
+            raise UserError(kind + ' source record cannot be represented within the review format.') from exc
+        yield row
+
+
+def _bounded_rows(db, selection, kind):
+    return list(_bounded_iter(db, selection, kind))
 
 
 def text(value):
@@ -136,6 +161,41 @@ def message_entries(rows):
     return entries
 
 
+def _message_page(db, selection, offset, limit):
+    # Preserve historical Python slice behavior for direct nonstandard calls.
+    # The records API supplies nonnegative integer offsets and a fixed limit.
+    if type(offset) is not int or type(limit) is not int or offset < 0 or limit < 0:
+        rows = _bounded_rows(db, selection, 'Message')
+        entries = message_entries(rows)
+        return entries[offset:offset+limit], len(entries), len(rows)
+    page = []
+    selected = {}
+    discord_ordinals = {}
+    matching = source_records = 0
+    for row in _bounded_iter(db, selection, 'Message'):
+        source_records += 1
+        key = message_review_key(row)
+        # iter_artifacts yields each artifact primary key once. Only the explicit
+        # Discord rule groups separate stored artifacts; other rows need no map.
+        if key[0] == 'discord-message' and key in discord_ordinals:
+            ordinal = discord_ordinals[key]
+            entry = selected.get(ordinal)
+            if entry is not None:
+                entry['investigator_view']['observations'].append(observation(row))
+                entry['investigator_view']['note']='Matching Discord message representations in this retained evidence bundle; account, channel, message ID, sender, content and time agree. Every report observation remains available. This does not establish complete conversation history.'
+            continue
+        ordinal = matching
+        matching += 1
+        if key[0] == 'discord-message':
+            discord_ordinals[key] = ordinal
+        if offset <= ordinal < offset + limit:
+            entry = display_record(row)
+            page.append(entry)
+            if key[0] == 'discord-message':
+                selected[ordinal] = entry
+    return page, matching, source_records
+
+
 def display_record(row):
     data=row['data'];fields=data.get('_leapp_fields',data);name=data.get('_leapp_report_name','')
     if row['category']=='contacts':
@@ -146,10 +206,31 @@ def display_record(row):
         return project(row,'contact-observation',' / '.join(names) or row['title'],
                        [('Name',' / '.join(names)),('Phone number','\n'.join(phones)),('Email','\n'.join(emails))],
                        'Search result is a source observation. Open Contacts to assemble source-local contact fields.')
+    if row['category']=='apps' and row['parser'].startswith('native/'):
+        return project(row,'app-inventory',text(data.get('package')) or row['title'],
+                       [('Package ID',text(data.get('package'))),('APK path',text(data.get('apk_path')))],
+                       'Observed package inventory. Presence does not establish use; overlapping acquisitions remain separate source observations.')
+    if row['category']=='device' and row['parser'].startswith('native/'):
+        device_fields=[('Manufacturer','ro.product.manufacturer'),('Model','ro.product.model'),
+                       ('Android version','ro.build.version.release'),('Build','ro.build.display.id'),
+                       ('Security patch','ro.build.version.security_patch'),('Build fingerprint','ro.build.fingerprint')]
+        return project(row,'device',row['title'],[(label,text(data.get(key))) for label,key in device_fields],
+                       'Properties reported during acquisition. All original properties remain in provenance.')
+    if row['category']=='logs' and row['parser'].startswith('native/'):
+        result=project(row,'system-log',text(data.get('tag')) or row['title'],
+                       [('Tag',text(data.get('tag'))),('Level',text(data.get('level'))),
+                        ('Process ID',text(data.get('pid'))),('Thread ID',text(data.get('tid')))])
+        result['display_body']=row['body'];return result
     if row['category']=='messages':
         m=data.get('message',{});app=text(m.get('app')) or 'Unknown app'
         peer=supplied(m,'label','conversation');sender=supplied(m,'sender_label','sender')
-        result=project(row,'message',peer or row['title'],[('App',app),('Direction',text(m.get('direction'))),('Sender',sender)])
+        message_fields=[('App',app),('Direction',text(m.get('direction'))),('Sender',sender)]
+        attachment=data.get('attachment',{})
+        if isinstance(attachment,dict) and attachment.get('status'):
+            message_fields.append(('Attachment status',text(attachment['status']).replace('_',' ')))
+            if attachment.get('source_file'):message_fields.append(('Attachment source file',text(attachment['source_file'])))
+        if m.get('channel_id'):message_fields.append(('Channel ID',text(m['channel_id'])))
+        result=project(row,'message',peer or row['title'],message_fields)
         result['display_body']=row['body'];return result
     if row['category']=='calls':
         partner=supplied(fields,'number','Phone Number','Partner');kind=supplied(fields,'Call Type','call_type','Type','type')
@@ -191,13 +272,10 @@ def display_record(row):
 def investigator_records(db, selection, offset=0, limit=100, contact_basis='auto'):
     selection=dict(selection)
     if selection.get('category')=='messages':
-        rows=select_artifacts(db,limit=MAX_RECORDS+1,**selection)
-        if len(rows)>MAX_RECORDS or sum(len(json.dumps(r['data'],ensure_ascii=False).encode('utf-8')) for r in rows)>MAX_BYTES:
-            raise UserError('Message presentation exceeds the bounded review budget. Narrow the source scope or use Source records.')
-        entries=message_entries(rows)
-        return {'records':entries[offset:offset+limit],'has_more':offset+limit<len(entries),'offset':offset,
-                'summary':{'version':VERSION,'kind':'messages','matching_entries':len(entries),
-                           'source_records':len(rows),'meaning':'Matching Discord IDs and content within one evidence bundle share an entry; original report observations remain available. Other sources remain separate.'}}
+        page, matching, source_records = _message_page(db, selection, offset, limit)
+        return {'records':page,'has_more':offset+limit<matching,'offset':offset,
+                'summary':{'version':VERSION,'kind':'messages','matching_entries':matching,
+                           'source_records':source_records,'meaning':'Matching Discord IDs and content within one evidence bundle share an entry; original report observations remain available. Other sources remain separate.'}}
     if selection.get('category')!='contacts':
         rows=select_artifacts(db,limit=limit+1,offset=offset,**selection)
         return {'records':[display_record(r) for r in rows[:limit]],'has_more':len(rows)>limit,'offset':offset,
@@ -206,9 +284,7 @@ def investigator_records(db, selection, offset=0, limit=100, contact_basis='auto
     since=selection.pop('since',None);until=selection.pop('until',None)
     sort_field=selection.pop('sort_field',None);direction=selection.pop('sort_direction','asc');sort_mode=selection.pop('sort_mode','text')
     if sort_mode not in {'text','number','timestamp'} or direction not in {'asc','desc'}:raise UserError('Choose a supported sort interpretation and direction.')
-    rows=select_artifacts(db,limit=MAX_RECORDS+1,**selection)
-    if len(rows)>MAX_RECORDS or sum(len(json.dumps(r['data'],ensure_ascii=False).encode('utf-8')) for r in rows)>MAX_BYTES:
-        raise UserError('Contact projection exceeds the bounded review budget. Narrow the evidence scope or use Source records.')
+    rows=_bounded_rows(db,selection,'Contact')
     entries,summary=contacts(rows,contact_basis)
     digits=phone_digits(phone) if phone else None
     if phone and digits is None:raise UserError('Enter one complete phone number; country codes and extensions are not inferred.')

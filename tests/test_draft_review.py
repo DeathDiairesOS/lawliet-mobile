@@ -9,6 +9,7 @@ import unittest
 from pathlib import Path
 
 from tests import test_customer_report as customer_report_fixture
+from tests import test_redacted_package as redacted_fixture
 from lawliet_mobile.core import connect
 from lawliet_mobile.investigation_report import build_customer_draft
 
@@ -26,6 +27,7 @@ class DraftReviewTests(unittest.TestCase):
 
     def setUp(self):
         fixture=customer_report_fixture.CustomerReportTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        self.fixture=fixture
         with connect(fixture.ws,'A') as (root,db):
             self.folder=Path(build_customer_draft(root,db,fixture.iid)['path']).resolve()
 
@@ -42,6 +44,11 @@ class DraftReviewTests(unittest.TestCase):
         manifest.write_text(json.dumps(value))
 
     def test_actual_draft_preserves_unknowns_and_source_links(self):self.check('valid')
+    def test_actual_redacted_derivative_retains_sources_and_limits(self):
+        fixture=redacted_fixture.RedactionTests();fixture.setUp();self.addCleanup(fixture.doCleanups)
+        with connect(fixture.ws,'A') as (root,db):
+            result=fixture.create(root,db)
+        self.check('redacted',Path(result['path']))
     def test_wrong_case_is_rejected(self):self.check('wrong-case')
     def test_modified_output_is_rejected(self):
         (self.folder/'report.txt').write_text('tampered');self.check('tampered')
@@ -56,3 +63,35 @@ class DraftReviewTests(unittest.TestCase):
         p=self.folder/'manifest.json';value=json.loads(p.read_text());value['format']='future-v99';p.write_text(json.dumps(value));self.check('schema')
     def test_large_preview_is_reported_without_silent_truncation(self):
         p=self.folder/'report.txt';p.write_text('x'*(1024*1024+1));self.remanifest(p.name);self.check('large')
+
+    def examination(self, outcome='no_matches'):
+        from lawliet_mobile.app_backend import handle
+        from lawliet_mobile.investigation import get
+        with connect(self.fixture.ws,'A') as (_,db):
+            ids=get(db,self.fixture.iid)['scope']['evidence_ids']
+        result=handle(self.fixture.ws, {'action':'investigation-from-examination','case':'A',
+            'objective':'Review the selected supplied index','evidence_ids':ids,'outcome':outcome,
+            'examiner':'Synthetic examiner','examination_scope':'Selected supplied text index only',
+            'limitations':'This is not a complete phone extraction; app-private data unavailable.',
+            'queries':['absent fixture term'] if outcome=='no_matches' else []})
+        draft=handle(self.fixture.ws, {'action':'customer-report-draft','case':'A',
+            'investigation_id':result['investigation_id']})
+        self.folder=Path(draft['path']).resolve()
+
+    def test_actual_no_match_draft_preserves_query_provenance_without_fake_findings(self):
+        self.examination();self.check('examination-no-matches')
+
+    def test_actual_inconclusive_draft_with_no_searches_is_explicit(self):
+        self.examination('inconclusive');self.check('examination-inconclusive')
+
+    def test_contradictory_no_match_summary_is_refused(self):
+        self.examination()
+        p=self.folder/'technical-annex.json';value=json.loads(p.read_text())
+        value['examination']['queries'][0]['returned_records']=1
+        p.write_text(json.dumps(value));self.remanifest(p.name);self.check('false-no-match')
+
+    def test_unknown_examination_schema_is_refused(self):
+        self.examination()
+        p=self.folder/'technical-annex.json';value=json.loads(p.read_text())
+        value['examination']['schema_version']=99
+        p.write_text(json.dumps(value));self.remanifest(p.name);self.check('examination-version')

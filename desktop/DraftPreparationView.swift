@@ -15,35 +15,41 @@ struct DraftPreparationView:View {
     @State private var error=""
     @State private var investigationID=""
     @State private var boundIDs:[String]=[]
-    private var canCreate:Bool {!working && !objective.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && objective.count<=16000 && !selected.isEmpty && selected.count<=100}
+    @State private var context=""
+    private var canCreate:Bool {!working && !m.busy && context==m.currentCasePath && !objective.trimmingCharacters(in:.whitespacesAndNewlines).isEmpty && objective.count<=16000 && !selected.isEmpty && selected.count<=100}
     private func load(_ next:Int=0) {
         guard !working else {return};working=true;error=""
+        let identity=context,workspace=m.workspace,caseID=m.caseID
         Task {
             do {
-                let result=try await m.request("findings",["case":m.caseID,"offset":next]) as? [String:Any] ?? [:]
+                let result=try await AppModel.bridge(["action":"findings","workspace":workspace,"case":caseID,"offset":next]) as? [String:Any] ?? [:]
+                guard context==identity,m.currentCasePath==identity else {return}
                 findings=(result["findings"] as? [[String:Any]] ?? []).map(FindingItem.init)
                 total=result["total"] as? Int ?? 0;more=result["has_more"] as? Bool ?? false;offset=next
-            } catch {self.error=error.localizedDescription}
-            working=false
+            } catch {if context==identity {self.error=error.localizedDescription}}
+            if context==identity {working=false}
         }
     }
     private func create() {
         guard canCreate else {return};working=true;error=""
-        let ids=selected.sorted(),question=objective,caseID=m.caseID
+        let ids=selected.sorted(),question=objective,caseID=m.caseID,workspace=m.workspace,identity=context
         Task {
             do {
                 // Retain a successful binding if report output fails; retrying the
                 // same selection then reuses it rather than creating another ledger.
                 if investigationID.isEmpty || boundIDs != ids {
-                    let result=try await m.request("investigation-from-findings",["case":caseID,"finding_ids":ids,"objective":question]) as? [String:Any] ?? [:]
+                    let result=try await AppModel.bridge(["action":"investigation-from-findings","workspace":workspace,"case":caseID,"finding_ids":ids,"objective":question]) as? [String:Any] ?? [:]
+                    guard context==identity,m.currentCasePath==identity else {return}
                     guard let iid=result["investigation_id"] as? String,!iid.isEmpty else {throw DraftReviewError.invalid("Backend returned no investigation identifier.")}
                     investigationID=iid;boundIDs=ids
                 }
-                let result=try await m.request("customer-report-draft",["case":caseID,"investigation_id":investigationID]) as? [String:Any] ?? [:]
+                guard context==identity,m.currentCasePath==identity else {return}
+                let result=try await AppModel.bridge(["action":"customer-report-draft","workspace":workspace,"case":caseID,"investigation_id":investigationID]) as? [String:Any] ?? [:]
+                guard context==identity,m.currentCasePath==identity else {return}
                 guard let path=result["path"] as? String,result["review_status"] as? String=="draft_unreviewed" else {throw DraftReviewError.invalid("Backend did not return a supported unreviewed draft.")}
                 m.draftPath=path;m.dialog = .draftReview
-            } catch {self.error=error.localizedDescription}
-            working=false
+            } catch {if context==identity {self.error=error.localizedDescription}}
+            if context==identity {working=false}
         }
     }
     var body:some View {
@@ -69,6 +75,7 @@ struct DraftPreparationView:View {
             if !error.isEmpty {Label(error,systemImage:"exclamationmark.triangle").font(.caption).foregroundStyle(.orange).textSelection(.enabled).fixedSize(horizontal:false,vertical:true)}
             HStack {Button("Cancel"){dismiss()}.disabled(working).keyboardShortcut(.cancelAction);if working {ProgressView().controlSize(.small)};Spacer();Button(investigationID.isEmpty ? "Create unreviewed draft":"Retry draft creation"){create()}.disabled(!canCreate).buttonStyle(.borderedProminent)}
         }.font(.system(size:12)).controlSize(.small).padding(20).frame(width:780,height:590)
-        .task {objective=m.managementValue("objective");load()}
+        .task {context=m.currentCasePath;objective=m.managementValue("objective");load()}
+        .onChange(of:m.currentCasePath){_ in context="";working=false;investigationID="";findings=[];selected=[];error="Case changed. Reopen preparation from the intended case."}
     }
 }

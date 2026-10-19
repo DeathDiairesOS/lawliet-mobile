@@ -1,0 +1,7 @@
+(version 1)
+; Opt-in restricted parser endpoint. Only the explicitly pinned Unix daemon
+; socket is reachable. Trusted controller has Docker API access; parser has
+; no socket mount and runs with --network none. Default offline policy unchanged.
+(allow default)
+(deny network*)
+(allow network-outbound (literal (param "DOCKER_SOCKET")))

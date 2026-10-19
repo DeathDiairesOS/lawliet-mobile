@@ -8,7 +8,11 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from lawliet_mobile.core import UserError, connect, create_case
+from lawliet_mobile.mulder_ownership import bind_review_case
 try:
+    from mulder.audit import AuditLog
+    from mulder.db import CaseDB
+    from mulder.server import app
     from mulder.server.tools import phone
 except ModuleNotFoundError as error:
     if error.name != "mulder":
@@ -29,8 +33,11 @@ class MulderChatImportTests(unittest.TestCase):
         self.source = self.base / 'chat.txt'
         self.source.write_text('10/01/26, 09:00 - Jamie: First line\nSecond 😀\n')
         self.fn = inspect.unwrap(phone.import_ancalor_chat_review)
-        context = patch.object(phone, 'get_ctx', return_value=SimpleNamespace(
-            db=SimpleNamespace(db_path=self.base / 'active.db')))
+        parent = CaseDB.create('active', str(self.base), self.base)
+        self.addCleanup(parent.close)
+        bind_review_case(self.case, parent.db_path)
+        context = patch.object(app, '_ctx', SimpleNamespace(
+            case_id='active', db=parent, audit=AuditLog(self.base / 'active-audit.jsonl')))
         context.start()
         self.addCleanup(context.stop)
 
@@ -76,7 +83,7 @@ class MulderChatImportTests(unittest.TestCase):
     def test_external_case_and_symlink_sources_are_refused(self):
         elsewhere = self.base / 'external'
         create_case(elsewhere, 'foreign')
-        with self.assertRaises(ValueError):
+        with self.assertRaises(UserError):
             self.fn(str(elsewhere / 'foreign'), str(self.source), 'mdy')
         link = self.base / 'linked.txt'
         link.symlink_to(self.source)
@@ -99,6 +106,16 @@ class MulderChatImportTests(unittest.TestCase):
             self.run_import()
         with connect(self.workspace, 'first') as (_, db):
             self.assertEqual(db.execute('SELECT COUNT(*) FROM evidence').fetchone()[0], 0)
+
+    def test_sibling_bound_to_another_parent_is_refused_before_import(self):
+        parent = CaseDB.create('other-parent', str(self.base), self.base)
+        self.addCleanup(parent.close)
+        other = self.workspace / 'other'
+        bind_review_case(other, parent.db_path)
+        before = (other / 'case.sqlite').read_bytes()
+        with self.assertRaisesRegex(UserError, 'another'):
+            self.fn(str(other), str(self.source), 'mdy')
+        self.assertEqual((other / 'case.sqlite').read_bytes(), before)
 
     def test_existing_case_tampering_blocks_import(self):
         first = self.run_import()

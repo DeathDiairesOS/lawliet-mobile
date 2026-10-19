@@ -209,10 +209,10 @@ SHA-256 comparisons. Draft preparation is not an agent run, approval or release.
 Case-wide queries, native conversation selection, visible scope/sort, hideable
 navigation, source filename/hash fields and honest empty agent states now support
 the compact examiner workflow. Thirty focused regression tests passed, and native
-compilation/signature verification passed. The research, actual click-through
-matrix, exact limits and ordered follow-ups are in [UI-UX-AUDIT.md](UI-UX-AUDIT.md).
-That document is the current validation account; older sections above describe
-earlier checkpoints rather than current feature gaps.
+compilation/signature verification passed. Detailed click-through receipts and
+machine-specific validation notes are retained locally. The public
+[README](../README.md) describes supported workflows and limitations; older
+sections above describe earlier checkpoints rather than current feature gaps.
 
 ### Installed launch location corrected
 

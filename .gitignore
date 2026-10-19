@@ -28,6 +28,7 @@ htmlcov/
 /docs/local-workspace.txt
 /docs/session-handoff.json
 /docs/session-handoff.lock
+/docs/session-handoff.json.lock
 /docs/task-progress.json
 /docs/local-recovery-status.json
 /docs/ui-recovery-provenance.json
@@ -37,6 +38,11 @@ htmlcov/
 /docs/DFIR-6-completion-review.json
 /docs/DFIR-23-candidate-support-matrix.json
 /docs/DFIR-23-native-wal-limitations.json
+/docs/engineering-impact.json
+/docs/negative-report-status.json
+/docs/open-engineering-acceptance.json
+/docs/platform-qc-status.json
+/docs/release-gap-status.json
 
 # Local validation notes containing machine-specific source references
 /docs/UI-UX-AUDIT.md

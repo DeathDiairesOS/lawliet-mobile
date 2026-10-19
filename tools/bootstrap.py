@@ -98,6 +98,7 @@ def environment(runtime, name, python, lock=None):
 
 def verify(runtime, profile, workspace, manifest):
     results = []
+    runtime_qualification = None
     def check(name, argv, expected=None, env=None):
         try:
             p = run(argv, capture_output=True, text=True, timeout=600, env=env)
@@ -120,15 +121,18 @@ def verify(runtime, profile, workspace, manifest):
             # Real parsers against synthetic known records, plus importer/provenance assertions.
             env['PYTHONPATH'] = str(ROOT)
             check(name + ' synthetic record integration', [runtime / 'envs/core/bin/python', '-m', 'unittest', 'tests.test_leapp_integration', '-v'], env=env)
-        check('patched Mulder version', [runtime / 'bin/mulder', '--version'], manifest['expected_mulder_version'])
-        check('Mulder MCP initialization and mobile tool listing', [runtime / 'envs/mulder/bin/python', ROOT / 'tools/verify_mcp.py', runtime / 'bin/mulder'])
+        # A version banner is shared by different downstream builds. Verify the
+        # imported checkout and all MCP profile schemas before accepting runtime.
+        runtime_qualification = json.loads(check('Mulder source fingerprint and MCP profile schemas',
+            [runtime / 'envs/mulder/bin/python', ROOT / 'tools/verify_mcp.py', runtime / 'bin/mulder']))
         check('MVT CLI', [runtime / 'envs/mvt/bin/mvt-ios', '--help'])
         commands = {'adb': ['version'], 'scrcpy': ['--version'], 'exiftool': ['-ver'], 'yara': ['--version'], 'idevice_id': ['--version'], 'idevicebackup2': ['--version']}
         config = json.loads((workspace / 'tools.json').read_text())
         for name, args in commands.items():
             check(name + ' executable', [config[name], *args])
     receipt = {'profile': profile, 'checks': results, 'device_checks': 'not performed; connect a test phone for acceptance',
-               'model_login': 'not performed', 'limitations': manifest['limitations']}
+               'model_login': 'not performed', 'limitations': manifest['limitations'],
+               'mulder_runtime_qualification': runtime_qualification}
     write_json(runtime / 'verification.json', receipt)
     print('Verification passed. Receipt: ' + str(runtime / 'verification.json'))
     return receipt
@@ -185,6 +189,10 @@ def main():
     if destination.exists():
         shutil.rmtree(destination)  # Only this installer's generated package snapshot.
     shutil.copytree(ROOT / 'lawliet_mobile', destination, ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    for relative in ('setup/mobile-macos-arm64.json', 'integrations/mulder/lawliet.patch'):
+        target = destination / '_mulder_contract' / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(ROOT / relative, target)
     wrapper(runtime / 'bin/lawliet', [core, '-m', 'lawliet_mobile'])
     config_path = workspace / 'tools.json'
     config = json.loads(config_path.read_text()) if config_path.exists() else {}
@@ -201,12 +209,14 @@ def main():
         py = environment(runtime, 'mulder', python, manifest['locks']['mulder'])
         # Source is revision-checked and patch-checked; PYTHONPATH avoids unpinned build dependencies.
         env = {'PYTHONPATH': os.pathsep.join([str(source / 'src'), str(site)]),
+               'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONPYCACHEPREFIX': '/dev/null/lawliet-source-only',
                'PATH': os.pathsep.join([str(runtime / 'bin'), str(mvt.parent), '/opt/homebrew/bin', '/usr/bin', '/bin']),
                'MULDER_ASSET_ROOT': str(runtime / 'assets'), 'MULDER_CWD': str(runtime / 'scratch'),
                'MULDER_DB_DIR': str(workspace / 'mulder')}
         for folder in ('assets', 'scratch'):
             (runtime / folder).mkdir(exist_ok=True)
-        wrapper(runtime / 'bin/mulder', [py, '-c', 'from mulder.cli import cli; cli()'], env)
+        wrapper(runtime / 'bin/mulder', [py, '-B', '-P', '-c', 'from mulder.cli import cli; cli()'], env)
+        config['mulder'] = str(runtime / 'bin/mulder')
         for name in ('adb', 'scrcpy', 'exiftool', 'idevice_id', 'idevicebackup2', 'yara'):
             path = Path('/opt/homebrew/bin') / name
             if not path.is_file():

@@ -13,6 +13,8 @@ def export(root, db, iid, destination):
     try:
         state = get(db, iid)
         checked = verify_ledger(db)
+        from .examination_report import checked as checked_examination
+        examination = checked_examination(root, db, iid)
         path = safe_output(root, db, destination)
         receipt_path = safe_output(root, db, str(path) + '.receipt.json')
         if path.exists() or receipt_path.exists():
@@ -32,6 +34,10 @@ def export(root, db, iid, destination):
                       'Backend parser runs below are contextual case history, not actions performed by this controller.',
                       'Failed query attempts are not yet durably recorded; the trace is not a complete attempt history.',
                       'No model ran; model cost and analyst time saved were not measured.']}
+        if examination is not None:
+            header['examination'] = examination
+            header['limitations'][2] = 'Selected retained source bytes were rehashed and scoped input/index state rechecked for this examination export.'
+            header['limitations'].extend(examination['method_limitations'])
 
         def events(kind=None):
             query = 'SELECT * FROM investigation_events WHERE investigation_id=?'
@@ -72,6 +78,8 @@ def export(root, db, iid, destination):
                 section(kind + '_entries', events('analyst.' + kind))
             section('execution_trace', events())
             out.write('\n}\n')
+        if examination is not None:
+            checked_examination(root, db, iid)
         receipt = {'format': 'ancalor-investigation-export-receipt-v1', 'filename': path.name,
                    'case_id': meta['case_id'], 'investigation_id': iid, 'created_at': now(),
                    'sha256': digest(path), 'bytes': path.stat().st_size,
@@ -141,7 +149,10 @@ def build_customer_draft(root, db, iid, redactions=None):
                         'verification':'Source linkage only; assertion accuracy and source authenticity require examiner review.'}
                 entries.append({'kind':kind,'entry_id':event['action_key'],'text':event['request']['text'],'artifact_ids':refs})
         chronology=sorted(citations.values(),key=lambda c:(c['snapshot'].get('timestamp') is None,c['snapshot'].get('timestamp') or '',c['artifact_id']))
-        coverage=portable_summary(case_coverage(root,db)['ledger'],{'format':'customer-draft','records':len(citations),'evidence_ids':state['scope']['evidence_ids'],'source_pairs':source_pairs(c['snapshot'] for c in citations.values())})
+        examination=data.get('examination')
+        coverage=({'schema_version':1,'state_counts':{},'detail_withheld':True,
+                   'note':'Scoped source/index processing snapshot is retained in examination; coverage or completeness is not inferred.'}
+                  if examination is not None else portable_summary(case_coverage(root,db)['ledger'],{'format':'customer-draft','records':len(citations),'evidence_ids':state['scope']['evidence_ids'],'source_pairs':source_pairs(c['snapshot'] for c in citations.values())}))
         annex={'format':'ancalor-customer-annex-v1','review_status':'draft_unreviewed','investigation_id':iid,
                'objective':state['objective'],'scope':state['scope'],'source_inventory':data['evidence_inventory'],
                'methods_and_versions':data['backend_processing_history'],'entries':entries,'chronology_artifact_ids':[c['artifact_id'] for c in chronology],
@@ -150,6 +161,8 @@ def build_customer_draft(root, db, iid, redactions=None):
                    'Conflicts are unresolved unless explicitly described by the analyst; no automated contradiction adjudication is performed.',
                    'Attachment states are parser observations, not verified file inclusion. All exhibits are indexed snapshots only.',
                    'This draft is unredacted. Redaction requests are refused; no sensitive-string removal is claimed.']}
+        if examination is not None:
+            annex['examination']=examination
         (folder/'technical-annex.json').write_text(json.dumps(annex,ensure_ascii=True,indent=2)+'\n')
         with (folder/'exhibits.jsonl').open('x',encoding='utf-8') as stream:
             for citation in citations.values():stream.write(json_text(citation)+'\n')
@@ -157,6 +170,15 @@ def build_customer_draft(root, db, iid, redactions=None):
                'Question: '+state['objective'],'Scope: selected investigation evidence only.',
                f"Material source-linked entries: {sum(x['kind'] in ('observation','interpretation') for x in entries)}; unique cited artifact snapshots: {len(citations)}.",
                'SOURCE INVENTORY']
+        if examination is not None:
+            lines[5:5]=['SCOPED EXAMINATION OUTCOME', examination['label'],
+                        'Examiner label: '+examination['examiner'], 'Declared examination scope: '+examination['examination_scope'],
+                        'Examiner limitations: '+examination['limitations'],
+                        'Scoped input/index snapshot SHA-256: '+examination['snapshot']['sha256'],
+                        'Retained processing statuses: '+json.dumps(examination['snapshot']['processing_status_counts'],sort_keys=True),
+                        'Scoped inventory/index counts: '+json.dumps(examination['snapshot']['counts'],sort_keys=True),
+                        *[f"Literal query {q['text']!r}: returned {q['returned_records']} records; more results {q['has_more']}; action {q['action_key']}; event {q['event_sequence']}; event SHA-256 {q['event_sha256']}" for q in examination['queries']],
+                        *examination['method_limitations']]
         for source in data['evidence_inventory']:lines.append(f"{source['id']} · {source['label']} · {source['platform']} · supplied files {source['inventoried_files']}")
         lines.append('METHODS / VERSIONS')
         for run in data['backend_processing_history']:lines.append(f"{run['engine']} · run {run['id']} · status {run['status']}")
@@ -180,6 +202,9 @@ def build_customer_draft(root, db, iid, redactions=None):
                   'counts':{'unique_cited_artifacts':len(citations),'entries':len(entries)},'attachments':'references-only; no raw attachments or external assets copied'}
         (folder/'manifest.json').write_text(json.dumps(manifest,indent=2)+'\n')
         manifest_sha=digest(folder/'manifest.json')
+        if examination is not None:
+            from .examination_report import checked as checked_examination
+            checked_examination(root,db,iid)
         audit(db,'customer_report.draft_created',{'draft_id':draft_id,'investigation_id':iid,'manifest_sha256':manifest_sha})
         db.execute('RELEASE SAVEPOINT customer_draft')
         return {'draft_id':draft_id,'path':str(folder),'manifest_sha256':manifest_sha,'review_status':'draft_unreviewed','counts':manifest['counts']}
@@ -224,6 +249,8 @@ def _checked_draft(root,db,draft_id):
         expected.add(relative.name)
     if {p.name for p in folder.iterdir()}!=expected:raise UserError('Draft contains unmanifested content.')
     if _fingerprint(db,manifest['investigation_id'])!=manifest['investigation_fingerprint']:raise UserError('Investigation changed after draft; rebuild and re-review.')
+    from .examination_report import checked as checked_examination
+    checked_examination(root,db,manifest['investigation_id'])
     annex=json.loads((folder/'technical-annex.json').read_text())
     for citation in annex['citations']:
         locator=citation['source_locator'];snapshot=citation['snapshot']
@@ -270,6 +297,9 @@ def release_customer_draft(root,db,draft_id,destination,redactions=None):
             raise UserError('Unexpected content appeared in release package.')
         if digest(target/'manifest.json')!=sha or any(digest(target/f['path'])!=f['sha256'] or (target/f['path']).stat().st_size!=f['bytes'] for f in manifest['files']):
             raise UserError('Draft changed during release copy; no release produced.')
+        _,_,after_sha=_checked_draft(root,db,draft_id)
+        if after_sha!=sha:
+            raise UserError('Draft changed during release copy; no release produced.')
         receipt={'draft_id':draft_id,'manifest_sha256':sha,'approval':approvals[-1],'released_at':now(),'review_status':'recorded_examiner_approval','limitations':'Approval is an operator declaration, not independently authenticated signoff. Bundled content retains original draft labels because approved bytes are not rewritten.'}
         (target/'release-receipt.json').write_text(json.dumps(receipt,indent=2)+'\n')
         audit(db,'customer_report.released',{'draft_id':draft_id,'manifest_sha256':sha,'path':str(target),'release_receipt_sha256':digest(target/'release-receipt.json')})
@@ -282,6 +312,12 @@ def release_customer_draft(root,db,draft_id,destination,redactions=None):
 _REDACT_FILES={'report.txt','technical-annex.json','investigation.json','exhibits.jsonl'}
 _REDACT_BYTES=16*1024**2
 _REDACT_MATCHES=10000
+_REDACT_REPORT_BANNER=(
+ 'LAWLIET — SELECTED-LITERAL REDACTED REPORT DRAFT\n\n'
+ 'UNREVIEWED / SELECTED LITERALS REMOVED / REFERENCES ONLY\n\n'
+ 'Only operator-selected case-sensitive literals were removed. Original evidence and binary media are not included.\n\n'
+ 'SOURCE DRAFT TEXT — inherited labels below describe the original draft before masking.\n\n'
+)
 _REDACT_LIMITS=[
  'References-only package: no original evidence, media, attachments, thumbnails, PDFs, indexes or external assets are copied or fetched.',
  'Only operator-selected case-sensitive literals were removed; case, spelling and Unicode variants are not inferred. This is not automatic sensitive-data detection.',
@@ -305,7 +341,7 @@ def _redaction_json(text):
     return json.loads(text,object_pairs_hook=pairs,parse_constant=constant)
 
 
-def _redaction_transform(payloads,literals):
+def _redaction_transform(payloads,literals,report_banner=False):
     """Worker-only bounded transformation; structured values never replaced as raw JSON."""
     import re,time
     from .masking_preview import _literals
@@ -350,6 +386,9 @@ def _redaction_transform(payloads,literals):
             output[name]=''.join(json.dumps(walk(_redaction_json(line)),ensure_ascii=False,allow_nan=False)+'\n' for line in lines if line.strip())
         else:output[name]=json.dumps(walk(_redaction_json(raw)),ensure_ascii=False,indent=2,allow_nan=False)+'\n'
     if not sum(counts):raise UserError('No selected literal matched; no derivative produced.')
+    # Add the derivative's current status without rewriting quoted source text.
+    # Mask the heading too, and require a source match before introducing it.
+    if report_banner:output['report.txt']=text(_REDACT_REPORT_BANNER)+output['report.txt']
     if sum(len(x.encode('utf-8')) for x in output.values())>_REDACT_BYTES:raise UserError('Redaction output byte budget exceeded.')
     _redaction_scan(output,literals)
     return {'payloads':output,'selection_counts':counts,'consumed_matches':sum(counts)}
@@ -380,11 +419,11 @@ def _redaction_scan(payloads,literals):
                 if line.strip():scan(_redaction_json(line))
 
 
-def _redaction_worker(payloads,literals):
+def _redaction_worker(payloads,literals,report_banner=False):
     import subprocess,sys,tempfile
     from pathlib import Path
-    program="import importlib.util,sys,json; p=importlib.util.spec_from_file_location('lawliet_mobile._redaction_stage',sys.argv[1]); m=importlib.util.module_from_spec(p); p.loader.exec_module(m); d=json.load(open(sys.argv[2])); r=m._redaction_transform(d['payloads'],d['literals']); open(sys.argv[3],'x').write(json.dumps(r,ensure_ascii=False))"
-    encoded=json.dumps({'payloads':payloads,'literals':literals},ensure_ascii=False)
+    program="import importlib.util,sys,json; p=importlib.util.spec_from_file_location('lawliet_mobile._redaction_stage',sys.argv[1]); m=importlib.util.module_from_spec(p); p.loader.exec_module(m); d=json.load(open(sys.argv[2])); r=m._redaction_transform(d['payloads'],d['literals'],d.get('report_banner',False)); open(sys.argv[3],'x').write(json.dumps(r,ensure_ascii=False))"
+    encoded=json.dumps({'payloads':payloads,'literals':literals,'report_banner':report_banner},ensure_ascii=False)
     if len(encoded.encode('utf-8'))>2*_REDACT_BYTES:raise UserError('Redaction worker input budget exceeded.')
     with tempfile.TemporaryDirectory(prefix='lawliet-redacted-') as td:
         folder=Path(td);request=folder/'input.json';output=folder/'output.json';request.write_text(encoded,encoding='utf-8')
@@ -419,8 +458,15 @@ def create_redacted_customer_draft(root,db,draft_id,literals):
         for c in annex['citations']:
             protected.extend(str(v) for v in [c['artifact_id'],c['snapshot']['evidence_id'],c['snapshot']['file_id'],c['source_locator']['recorded_source_sha256']])
         if any(literal in value for literal in literals for value in protected):raise UserError('Selection overlaps citation identity/hash; narrower literal selection required.')
-        result=_redaction_worker(payloads,literals);redacted=result['payloads']
+        result=_redaction_worker(payloads,literals,report_banner=True);redacted=result['payloads']
         transformed=_redaction_json(redacted['technical-annex.json'])
+        if annex.get('examination') is not None:
+            from .examination_report import structural_identity
+            changed=transformed.get('examination')
+            if (not isinstance(changed,dict) or
+                    structural_identity(changed)!=structural_identity(annex['examination']) or
+                    _redaction_json(redacted['investigation.json']).get('examination')!=changed):
+                raise UserError('Redaction changes examination outcome, structure or query receipts; choose narrower literals.')
         exhibits=[_redaction_json(line) for line in redacted['exhibits.jsonl'].splitlines() if line.strip()]
         if transformed['citations']!=exhibits:raise UserError('Redacted annex/exhibit citations diverged.')
         if len(transformed['entries'])!=manifest['counts']['entries'] or len(exhibits)!=manifest['counts']['unique_cited_artifacts']:raise UserError('Redaction changed counts.')

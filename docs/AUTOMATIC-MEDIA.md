@@ -44,8 +44,8 @@ report references alone do not establish that original media was acquired.
   chain: `build/inline-media-ui-integrity.json`.
 - A synthetic WebP passed the actual verified native decoder:
   `build/inline-webp-check.log`.
-- The normal installed app was opened on `NATIVE-tc-333045cb`, the case in the
-  user's screenshot. WebP/PNG/JPEG rows showed verified thumbnails and its selected
+- The normal installed app was opened on a retained media test case.
+  WebP/PNG/JPEG rows showed verified thumbnails and its selected
   WebP rendered automatically inside Record details. No manual preview was needed.
 - The tested native executable was installed in the existing app. All 66 resource
   files, including its existing backend, were preserved. Signature verification

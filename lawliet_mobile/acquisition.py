@@ -14,8 +14,13 @@ from .core import UserError, audit, digest, import_evidence, json_text, now
 APPS = {'whatsapp': 'com.whatsapp', 'whatsapp_business': 'com.whatsapp.w4b', 'signal': 'org.thoughtcrime.securesms'}
 
 
-def collect_android(root, db, workspace, serial, profile='messages', pulls=(), timeout=900, max_bytes=20 * 1024**3):
+def collect_android(root, db, workspace, serial, profile='messages', pulls=(), timeout=900, max_bytes=20 * 1024**3,
+                    max_sms=1000, android_user=None, sms_prefix=None):
     from .tools import command, execute, storage_guard
+    if profile == 'sms-provider':
+        if pulls:raise UserError('SMS provider profile does not accept shared-storage paths.')
+        from .provider_sms import collect_sms
+        return collect_sms(root,db,workspace,serial,timeout,min(max_bytes,64*1024**2),max_sms,android_user,sms_prefix)
     if profile == 'trash-photos':
         if pulls: raise UserError('Trash profile uses a fixed shared-storage discovery path; no custom pulls.')
         from .trash_collection import collect_trash
@@ -23,11 +28,13 @@ def collect_android(root, db, workspace, serial, profile='messages', pulls=(), t
     if profile == 'contacts-provider':
         if pulls:raise UserError('Contacts profile does not accept shared-storage paths.')
         from .provider_contacts import collect_contacts
-        return collect_contacts(root,db,workspace,serial,timeout,min(max_bytes,64*1024**2))
+        return collect_contacts(root,db,workspace,serial,timeout,min(max_bytes,64*1024**2),user=android_user)
     if not serial or serial.startswith('-') or any(c.isspace() or c in '/\\' for c in serial):
         raise UserError('Supply a valid serial from devices.')
-    if profile not in {'messages', 'logical', 'files'}:
+    if profile not in {'messages', 'logical', 'files', 'triage'}:
         raise UserError('Unknown Android collection profile.')
+    if profile == 'triage' and pulls:
+        raise UserError('Triage accepts no shared-storage paths; select a separate files profile.')
     if profile == 'files' and not pulls:
         raise UserError('The files profile requires at least one --pull shared-storage path.')
     for remote in pulls:
@@ -36,8 +43,10 @@ def collect_android(root, db, workspace, serial, profile='messages', pulls=(), t
             raise UserError('Pull paths must be explicit shared-storage paths under /sdcard/ or /storage/emulated/0/, without traversal or shell characters.')
     cmd = command(workspace, 'adb') + ['-s', serial]
     run_id = uuid.uuid4().hex[:12]
-    folder = root / 'collections' / run_id
-    folder.mkdir(parents=True)
+    # Reuse the provider collector's anchored staging; never create collection
+    # output through an evidence-controlled collections symlink.
+    from .provider_contacts import _create_collection
+    folder = _create_collection(root, run_id)
     coverage, commands, errors = [], [], []
     evidence_id, status = None, 'failed'
     started = now()
@@ -47,7 +56,8 @@ def collect_android(root, db, workspace, serial, profile='messages', pulls=(), t
 
     def attempt(args, name, seconds=None):
         try:
-            result = execute(cmd + args, folder / name, seconds or timeout, guard=storage_guard(folder, max_bytes))
+            result = execute(cmd + args, folder / name, min(seconds, timeout) if seconds else timeout,
+                             guard=storage_guard(folder, max_bytes))
         except (subprocess.TimeoutExpired, OSError, UserError) as exc:
             result = getattr(exc, 'tool_result', {'argv': cmd + args, 'returncode': None, 'error': str(exc)})
         commands.append(result)
@@ -68,7 +78,12 @@ def collect_android(root, db, workspace, serial, profile='messages', pulls=(), t
                            (['shell', 'date', '+%Y-%m-%dT%H:%M:%S%z'], 'device-time.txt'), (['version'], 'adb-version.txt')]:
             before = now()
             result = attempt(args, name, 30)
-            item(name, 'collected' if result.get('returncode') == 0 else 'failed', 'Raw output retained; acquisition time is recorded separately.')
+            output = folder / name
+            okay = result.get('returncode') == 0 and not result.get('error')
+            if profile == 'triage':
+                okay = okay and output.is_file() and output.stat().st_size > 0
+            item(name, 'collected' if okay else 'failed', 'Raw output retained; acquisition time is recorded separately.',
+                 files=int(output.is_file()), bytes=output.stat().st_size if output.is_file() else 0)
             if name == 'device-time.txt':
                 (folder / 'clock-observation.json').write_text(json_text({'host_before_utc': before, 'host_after_utc': now(),
                     'device_output': (folder / name).read_text(errors='replace') if (folder / name).exists() else None,
@@ -78,13 +93,16 @@ def collect_android(root, db, workspace, serial, profile='messages', pulls=(), t
         for app, package in APPS.items():
             item(app, 'not_attempted', 'Private chat acquisition is not available through this profile. Supply an app export or a supported extraction with required keys.',
                  package=package, listed_in_package_inventory=package in package_names, parsing='not_assessed')
-        if profile == 'logical':
+        if profile in {'logical', 'triage'}:
             for args, name in [(['logcat', '-d', '-v', 'epoch'], 'logcat.txt'), (['bugreport', str(folder / 'bugreport.zip')], 'bugreport.log')]:
                 result = attempt(args, name)
-                okay = result.get('returncode') == 0
+                okay = result.get('returncode') == 0 and not result.get('error')
                 if args[0] == 'bugreport':
                     okay = okay and zipfile.is_zipfile(folder / 'bugreport.zip')
-                item(args[0], 'collected' if okay else 'failed', 'Diagnostic triage, not private app history.')
+                diagnostic = folder / ('bugreport.zip' if args[0] == 'bugreport' else name)
+                okay = okay and diagnostic.is_file()
+                item(args[0], 'collected' if okay else 'failed', 'Raw diagnostics retained; not every field is indexed and this is not private app history.',
+                     files=int(diagnostic.is_file()), bytes=diagnostic.stat().st_size if diagnostic.is_file() else 0)
         if profile in {'messages', 'logical'}:
             backup = folder / 'telephony.ab'
             result = attempt(['backup', '-f', str(backup), '-noapk', '-nocompress', 'com.android.providers.telephony'], 'telephony.log')
@@ -121,10 +139,11 @@ def collect_android(root, db, workspace, serial, profile='messages', pulls=(), t
             destination = folder / 'shared' / str(index)
             destination.mkdir(parents=True)
             result = attempt(['pull', '-a', remote, str(destination)], f'pull-{index}.log')
-            file_count = sum(p.is_file() for p in destination.rglob('*'))
+            sizes = [p.stat().st_size for p in destination.rglob('*') if p.is_file() and not p.is_symlink()]
+            file_count = len(sizes)
             item(remote, ('collected' if file_count else 'collected_empty') if result.get('returncode') == 0 else 'failed',
                  'Accessible shared storage only; files may change during live copying. Host hashes are recorded at intake.',
-                 local_path=str(destination.relative_to(folder)), files=file_count, estimated_bytes=size)
+                 local_path=str(destination.relative_to(folder)), files=file_count, bytes=sum(sizes), estimated_bytes=size)
         status = 'partial' if errors else 'complete'
     except BaseException as exc:
         status = 'interrupted' if isinstance(exc, KeyboardInterrupt) else 'failed'

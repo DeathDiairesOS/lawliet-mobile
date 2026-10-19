@@ -1,0 +1,4 @@
+(version 1)
+(allow default)
+(deny network*)
+(allow network-outbound (remote tcp "localhost:5037"))

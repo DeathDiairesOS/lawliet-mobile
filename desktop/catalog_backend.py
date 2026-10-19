@@ -7,7 +7,7 @@ import sqlite3
 import sys
 import time
 
-SKIP = {'evidence', 'derived', 'working', 'work', 'customer-drafts', 'reports',
+SKIP = {'evidence', 'derived', 'working', 'work', 'customer-drafts', 'customer-redacted-drafts', 'reports',
         'node_modules', '__pycache__', '.git', '.venv', 'venv', 'originals', 'staging',
         'retained-tools', 'data', 'inputs', 'extractions'}
 CASE_ID = re.compile(r'[A-Za-z0-9][A-Za-z0-9_-]{0,79}\Z')
@@ -139,39 +139,42 @@ def history(case_path, offset=0):
     case = roots_for([case_path])[0]
     if not (case / 'case.sqlite').is_file() or (case / 'case.sqlite').is_symlink():
         raise ValueError('Select an existing Lawliet case.')
-    folder = case / 'customer-drafts'
-    try:
-        folder.stat()
-    except FileNotFoundError:
-        return {'schema_version': 1, 'case_path': str(case), 'items': [], 'total': 0, 'offset': offset, 'has_more': False}
-    if folder.is_symlink():
-        raise ValueError('Symlinked report directories are not supported.')
     rows = []
-    with os.scandir(folder) as entries:
-        for count, entry in enumerate(entries):
-            if count >= 2000:
-                raise ValueError('More than 2,000 draft folders. Narrow the case report archive before listing.')
-            if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
-                continue
-            manifest = Path(entry.path) / 'manifest.json'
-            item = {'id': entry.name, 'path': entry.path, 'available': False, 'error': '', 'entries': 0, 'sources': 0}
-            try:
-                if manifest.is_symlink() or manifest.stat().st_size > 512 * 1024:
-                    raise ValueError('Unsafe or oversized manifest.')
-                with manifest.open('rb') as stream:
-                    value = json.loads(stream.read(512 * 1024 + 1))
-                if not isinstance(value, dict) or value.get('format') != 'ancalor-customer-bundle-v1' or value.get('draft_id') != entry.name:
-                    raise ValueError('Unsupported draft manifest.')
-                counts = value.get('counts', {})
-                for key in ['entries', 'unique_cited_artifacts']:
-                    if type(counts.get(key)) is not int or not 0 <= counts[key] <= 10000:
-                        raise ValueError('Invalid draft counts.')
-                item.update(available=True, entries=counts['entries'], sources=counts['unique_cited_artifacts'],
-                            investigation_id=str(value.get('investigation_id', ''))[:160],
-                            review_status='Unreviewed draft', modified=manifest.stat().st_mtime)
-            except (OSError, ValueError, TypeError, AttributeError) as exc:
-                item['error'] = str(exc)
-            rows.append(item)
+    scanned = 0
+    for dirname, kind, format_name, id_key in [
+        ('customer-drafts', 'original', 'ancalor-customer-bundle-v1', 'draft_id'),
+        ('customer-redacted-drafts', 'redacted', 'ancalor-customer-redacted-bundle-v1', 'derivative_id')]:
+        folder = case / dirname
+        if folder.is_symlink():
+            raise ValueError('Symlinked report directories are not supported.')
+        if not folder.exists():
+            continue
+        with os.scandir(folder) as entries:
+            for entry in entries:
+                scanned += 1
+                if scanned > 2000:
+                    raise ValueError('More than 2,000 report folders. Narrow the case report archive before listing.')
+                if entry.is_symlink() or not entry.is_dir(follow_symlinks=False):
+                    continue
+                manifest = Path(entry.path) / 'manifest.json'
+                item = {'id': entry.name, 'path': entry.path, 'kind': kind, 'available': False, 'error': '', 'entries': 0, 'sources': 0}
+                try:
+                    if manifest.is_symlink() or manifest.stat().st_size > 512 * 1024:
+                        raise ValueError('Unsafe or oversized manifest.')
+                    with manifest.open('rb') as stream:
+                        value = json.loads(stream.read(512 * 1024 + 1))
+                    if not isinstance(value, dict) or value.get('format') != format_name or value.get(id_key) != entry.name:
+                        raise ValueError('Unsupported draft manifest.')
+                    counts = value.get('counts', {})
+                    for key in ['entries', 'unique_cited_artifacts']:
+                        if type(counts.get(key)) is not int or not 0 <= counts[key] <= 10000:
+                            raise ValueError('Invalid draft counts.')
+                    item.update(available=True, entries=counts['entries'], sources=counts['unique_cited_artifacts'],
+                                investigation_id=str(value.get('investigation_id', ''))[:160],
+                                review_status='Open to verify approval', modified=manifest.stat().st_mtime)
+                except (OSError, ValueError, TypeError, AttributeError) as exc:
+                    item['error'] = str(exc)
+                rows.append(item)
     rows.sort(key=lambda r: (r.get('modified', 0), r['id']), reverse=True)
     return {'schema_version': 1, 'case_path': str(case), 'items': rows[offset:offset + 50],
             'total': len(rows), 'offset': offset, 'has_more': offset + 50 < len(rows)}

@@ -15,11 +15,12 @@ struct EngineInvestigationView: View {
     @State private var authorizeEnrichment=false
     @State private var working=false
     @State private var polling=false
-    @State private var message="Select existing output for review, or choose Launch engine to configure a separate investigation."
+    @State private var message=""
     @State private var jobs:[[String:Any]]=[]
     @State private var jobID=""
     @State private var state:[String:Any]=[:]
-    @State private var tab="Import output"
+    @State private var tab="Collect with agent"
+    @State private var handoff:CodexInvestigationHandoff?
     @State private var logText=""
     @State private var reportText=""
     @State private var findings:[[String:Any]]=[]
@@ -31,6 +32,51 @@ struct EngineInvestigationView: View {
     @State private var outputCaseID=""
     @State private var outputVersion="1.5.2"
     private let timer=Timer.publish(every:3,on:.main,in:.common).autoconnect()
+    private var usesLegacyEngine:Bool {!["Collect with agent","Codex + Mulder"].contains(tab)}
+    private var handoffIsCurrent:Bool {
+        handoff?.matches(workspace:m.workspace,caseID:m.caseID,evidenceID:evidence,objective:objective,questions:questions,scope:scope)==true && m.evidenceItems.contains{$0.id==evidence}
+    }
+    private var retainedSource:SourceItem? {m.sources.first{$0.evidence==evidence && $0.hasResults && !$0.isCaseWide}}
+    private func prepareHandoff() {
+        handoff=nil;message=""
+        guard m.evidenceItems.contains(where:{$0.id==evidence}) else {message="Select imported evidence in this case.";return}
+        do {handoff=try CodexInvestigationHandoff(workspace:m.workspace,caseID:m.caseID,evidenceID:evidence,objective:objective,questions:questions,scope:scope)}
+        catch {message=error.localizedDescription}
+    }
+    private var handoffView:some View {
+        VStack(alignment:.leading,spacing:10) {
+            Text("Continue an investigation in Codex").font(.headline)
+            Text("Codex reasons over the evidence using your configured Mulder MCP tools. Prepare a scoped request here, paste it into the intended Codex chat, then review retained results in Lawliet. This panel does not launch or control that chat.").font(.caption).foregroundStyle(LawlietTheme.secondary)
+            Picker("Evidence",selection:$evidence){Text("Select imported evidence").tag("");ForEach(m.evidenceItems){Text($0.label).tag($0.id)}}
+            TextField("Investigation objective",text:$objective).accessibilityLabel("Codex investigation objective")
+            Text("Questions (optional)").font(.caption)
+            TextEditor(text:$questions).frame(height:55).border(.gray.opacity(0.3)).accessibilityLabel("Codex investigation questions")
+            TextField("Authorized examination scope",text:$scope).accessibilityLabel("Codex examination scope")
+            Text("The request includes your briefing and local case paths. Review the configured Codex model and data policy before pasting it; this panel cannot verify its connection, permissions or provider.").font(.caption).foregroundStyle(LawlietTheme.secondary)
+            HStack {
+                Button("Prepare request"){prepareHandoff()}.disabled(evidence.isEmpty || m.busy)
+                Button("Copy request") {
+                    guard handoffIsCurrent,let request=handoff else {return}
+                    NSPasteboard.general.clearContents();NSPasteboard.general.setString(request.text,forType:.string)
+                    message="Copied the scoped request. Paste it into the intended Codex chat to continue; no investigation was started here."
+                }.disabled(!handoffIsCurrent || m.busy)
+                if handoff != nil && !handoffIsCurrent {Text("Briefing changed · prepare it again before copying.").font(.caption).foregroundStyle(.orange)}
+            }
+            if let request=handoff,handoffIsCurrent {
+                DisclosureGroup("Review prepared request · \(request.text.utf8.count.formatted()) bytes") {
+                    Text(request.text).font(.system(size:10,design:.monospaced)).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)
+                }
+            }
+            Divider()
+            Text("Review retained work").fontWeight(.medium)
+            HStack {
+                Button("Open indexed results"){if let source=retainedSource {m.dialog=nil;m.reviewSource(source.id)}}.disabled(retainedSource==nil || m.busy)
+                Button("Evidence & processing"){m.dialog=nil;m.mode="Sources"}.disabled(m.busy)
+                Button("Coverage & review"){m.dialog=nil;m.mode="Coverage"}.disabled(m.busy)
+            }
+            Text("Indexed results show a retained source for the selected evidence. Mulder tool visibility and successful case access must be checked in the connected Codex chat; neither is established by preparing this request.").font(.caption).foregroundStyle(LawlietTheme.secondary)
+        }
+    }
     private var config:[String:Any] {
         ["executable":executable,"model":model,"provider":provider,"objective":objective,
          "questions":questions,"known_facts":facts,"scope":scope,"evidence_id":evidence,
@@ -45,39 +91,56 @@ struct EngineInvestigationView: View {
         Task {do {try await body()} catch {message=error.localizedDescription};working=false}
     }
     private func refresh() async throws {
-        jobs=try await request("engine-list") as? [[String:Any]] ?? []
+        let context=m.currentCasePath
+        let refreshed=try await request("engine-list") as? [[String:Any]] ?? []
+        guard context==m.currentCasePath,usesLegacyEngine else {return}
+        jobs=refreshed
         if jobID.isEmpty {jobID=jobs.last?["id"] as? String ?? ""}
         if !jobID.isEmpty {
             let selected=jobID
             let result=try await request("engine-status",["job_id":selected]) as? [String:Any] ?? [:]
+            guard context==m.currentCasePath,jobID==selected,usesLegacyEngine else {return}
             let logs=try await request("engine-logs",["job_id":selected]) as? [String:Any] ?? [:]
-            guard jobID==selected else {return}
+            guard context==m.currentCasePath,jobID==selected,usesLegacyEngine else {return}
             state=result
             logText=(logs["truncated"] as? Bool == true ? "[Last 16 KiB]\n":"")+(logs["text"] as? String ?? "")
         }
     }
     private func loadFindings() async throws {
         guard !jobID.isEmpty else {findings=[];more=false;return}
-        let selected=jobID
+        let selected=jobID,context=m.currentCasePath,submittedQuery=query,submittedOffset=offset
         let result=try await request("engine-findings",["job_id":selected,"query":query,"offset":offset]) as? [String:Any] ?? [:]
-        guard jobID==selected else {return}
+        guard context==m.currentCasePath,jobID==selected,query==submittedQuery,offset==submittedOffset else {return}
         findings=result["records"] as? [[String:Any]] ?? [];more=result["has_more"] as? Bool ?? false
     }
     private func loadReport() async throws {
         guard !jobID.isEmpty else {reportText="";return}
-        let selected=jobID
+        let selected=jobID,context=m.currentCasePath
         let r=try await request("engine-report",["job_id":selected]) as? [String:Any] ?? [:]
-        guard jobID==selected else {return}
+        guard context==m.currentCasePath,jobID==selected else {return}
         reportText=(r["text"] as? String ?? "")+(r["truncated"] as? Bool == true ? "\n[Preview truncated at 2 MiB]":"")
     }
     var body:some View {
         VStack(alignment:.leading,spacing:10) {
-            HStack {Text("Agent investigation · Mulder").font(.system(size:17,weight:.semibold));Spacer();Text(m.caseID).foregroundStyle(LawlietTheme.secondary)}
-            Text("AI-generated findings require examiner review. Native macOS and local-model execution are not yet validated. Working copies are not an OS sandbox.").font(.caption).foregroundStyle(LawlietTheme.secondary)
-            Picker("View",selection:$tab){ForEach(["Import output","Launch engine","Runs","Findings","Report","Logs"],id:\.self){Text($0).tag($0)}}.pickerStyle(.segmented).disabled(working)
+            HStack {Text("Agent investigation").font(.system(size:17,weight:.semibold));Spacer();Text(m.caseID).foregroundStyle(LawlietTheme.secondary)}
+            Text("AI-generated interpretations require source verification and examiner review.").font(.caption).foregroundStyle(LawlietTheme.secondary)
+            Picker("Workflow",selection:$tab){
+                Text("Collect with agent").tag("Collect with agent")
+                Text("Examine retained evidence · Codex + Mulder").tag("Codex + Mulder")
+                Text("Import autonomous Mulder output").tag("Import output")
+                Text("Legacy autonomous launcher · advanced").tag("Launch engine")
+                Text("Imported / legacy runs").tag("Runs")
+                Text("Imported / legacy findings").tag("Findings")
+                Text("Imported / legacy report").tag("Report")
+                Text("Imported / legacy logs").tag("Logs")
+            }.disabled(working)
             ScrollView {
                 VStack(alignment:.leading,spacing:10) {
-                    if tab=="Launch engine" {
+                    if tab=="Collect with agent" {AgentCollectionView(m:m)}
+                    else if tab=="Codex + Mulder" {handoffView}
+                    else if tab=="Launch engine" {
+                        Text("Separate legacy adapter · reviewed upstream CLI 1.5.2 only. The patched Mulder installed by Lawliet setup serves the current MCP workflow and is not accepted by this launcher.").font(.caption).foregroundStyle(.orange)
+                        Text("Native macOS and local-model autonomous execution are not yet validated. Working copies are not an OS sandbox.").font(.caption).foregroundStyle(LawlietTheme.secondary)
                         Text("This launches mulder investigate, the autonomous engine. Codex uses a separate mulder serve / MCP connection; this panel does not control that session.").font(.caption).foregroundStyle(LawlietTheme.secondary)
                         Picker("Evidence",selection:$evidence){Text("Select imported evidence").tag("");ForEach(m.evidenceItems){Text($0.label).tag($0.id)}}
                         Button("Import evidence only…") {
@@ -119,7 +182,7 @@ struct EngineInvestigationView: View {
                         }.disabled(outputCaseID.isEmpty || outputVersion.isEmpty)
                     } else {
                         Picker("Investigation run",selection:$jobID){Text("Select run").tag("");ForEach(jobs.indices,id:\.self){i in Text("\((jobs[i]["id"] as? String ?? "").prefix(12)) · \(jobs[i]["status"] as? String ?? "unknown")").tag(jobs[i]["id"] as? String ?? "")}}
-                        if jobs.isEmpty {Text("No investigation runs in this case. Use Import output for existing results, or Launch engine after configuring and authorizing a provider.").font(.caption).foregroundStyle(LawlietTheme.secondary)}
+                        if jobs.isEmpty {Text("No imported or legacy autonomous runs in this case. Current Codex/Mulder MCP results appear in Evidence & processing and the artifact views.").font(.caption).foregroundStyle(LawlietTheme.secondary)}
                         if tab=="Runs" {
                             Text("Status: \(state["status"] as? String ?? "No run selected")").font(.headline)
                             Text(state["objective"] as? String ?? "").textSelection(.enabled)
@@ -167,19 +230,21 @@ struct EngineInvestigationView: View {
                 }.padding(4).disabled(working)
             }.frame(height:460)
             Text(message).font(.caption).textSelection(.enabled).lineLimit(5)
-            HStack{if working {ProgressView().controlSize(.small)};Button("Refresh"){perform{try await refresh()}};Spacer();Button("Close"){m.dialog=nil}}
+            HStack{if working {ProgressView().controlSize(.small)};if usesLegacyEngine {Button("Refresh"){perform{try await refresh()}}};Spacer();Button("Close"){m.dialog=nil}}
         }.font(.system(size:12)).controlSize(.small).padding(20).frame(width:700)
-        .task {evidence=m.source?.evidence ?? "";objective=m.managementValue("objective");scope=m.managementValue("scope");perform{try await refresh()}}
+        .task {evidence=m.source?.evidence ?? "";objective=m.managementValue("objective");scope=m.managementValue("scope")}
+        .onChange(of:m.currentCasePath){_ in handoff=nil;evidence="";objective="";questions="";scope="";message="";jobs=[];jobID="";state=[:];findings=[];reportText="";logText="";tab="Collect with agent"}
         .onReceive(timer){_ in if ["Runs","Logs"].contains(tab) && !working && !polling {
             polling=true
             Task {do {try await refresh()} catch {message=error.localizedDescription};polling=false}
         }}
-        .onChange(of:jobID){_ in findings=[];reportText="";offset=0;perform{
+        .onChange(of:jobID){_ in findings=[];reportText="";offset=0;guard usesLegacyEngine else {return};perform{
             try await refresh()
             if tab=="Findings" {try await loadFindings()}
             if tab=="Report" {try await loadReport()}
         }}
-        .onChange(of:tab){value in message="";if !jobID.isEmpty {perform {
+        .onChange(of:tab){value in message="";if usesLegacyEngine {perform {
+            try await refresh()
             if value=="Findings" {try await loadFindings()}
             if value=="Report" {try await loadReport()}
         }}}

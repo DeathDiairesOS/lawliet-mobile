@@ -4,7 +4,8 @@ from unittest.mock import patch
 from lawliet_mobile.iphone_connection import discover,describe
 from lawliet_mobile.core import UserError
 
-PHONE='00008140-001605620EF3001C'
+# Deliberately synthetic: never use an examiner's actual device identifier.
+PHONE='00000000-0000000000000001'
 class IPhoneConnectionTests(unittest.TestCase):
     def runner(self,calls,trust=True):
         def run(argv,**kwargs):

@@ -4,7 +4,7 @@ import AVKit
 import ImageIO
 import UniformTypeIdentifiers
 
-enum DesktopDialog: String, Identifiable {case deviceInteraction, whatsapp, signal, acquire, analyze, recovery, attachments, validation, findingNote, findings, investigationEngine, draftReview, draftPreparation, caseFolders, reportHistory; var id:String {rawValue}}
+enum DesktopDialog: String, Identifiable {case deviceInteraction, whatsapp, discord, signal, acquire, analyze, recovery, attachments, validation, findingNote, findings, investigationEngine, draftReview, draftPreparation, examinationPreparation, caseFolders, reportHistory, mvtReview; var id:String {rawValue}}
 struct DeviceItem: Identifiable {let id:String;let platform:String;let status:String}
 struct SQLiteItem: Identifiable {let id:Int;let path:String}
 struct EvidenceItem: Identifiable { let id: String; let label: String; let platform: String; let imported: String }
@@ -17,7 +17,7 @@ struct Artifact: Identifiable {
     let sourceRef: String; let sourceHash: String; let sourceFile:String; let parser: String; let taskSnapshot:Bool; let reportFields:[ReportField]
     let mediaObservationCount:Int
     let trashSource:Bool
-    let autoImagePreview:Bool
+    let autoImagePreview:Bool;let mediaAvailable:Bool
     var dateLabel: String {ReviewContext.dateLabel(timestamp)}
     var kindLabel:String {trashSource ? "MEDIA · TRASH COPY" : category=="recovery" ? "RECOVERY CANDIDATE" : parser.hasPrefix("mulder/") ? (category=="agent_findings" ? "AI FINDING":"TOOL OUTPUT WINDOW") : investigatorKind.isEmpty ? app.uppercased():investigatorKind.replacingOccurrences(of:"-",with:" ").uppercased()}
     init(_ r: [String:Any]) {
@@ -40,6 +40,7 @@ struct Artifact: Identifiable {
         }
         for key in fields.keys.sorted() where seen.insert(key).inserted {orderedKeys.append(key)}
         let byteMedia=data["media"] as? [String:Any] ?? data["attachment"] as? [String:Any] ?? [:]
+        mediaAvailable=byteMedia["status"] as? String == "available"
         let imageMime=byteMedia["mime"] as? String ?? data["MIMEType"] as? String ?? ""
         let byteSize=byteMedia["bytes"] as? Int ?? r["size"] as? Int ?? 0
         autoImagePreview=taskSnapshot || ((byteMedia["status"] as? String=="available" || (parser=="exiftool" && r["file_id"] is Int)) && imageMime.hasPrefix("image/") && byteSize<=64*1024*1024)
@@ -150,7 +151,9 @@ struct FindingItem: Identifiable {
 }
 
 @MainActor final class AppModel: ObservableObject {
-    @Published var displayedReview:ReviewContext?
+    @Published var displayedReview:ReviewContext? { didSet { if displayedReview == nil {displayedOffset=0;reviewError=""} } }
+    @Published private(set) var displayedOffset=0
+    @Published private(set) var reviewError=""
     @Published var caseListError=""
     @Published var caseProfile:[String:Any]=[:]
     @Published var caseTasks:[CaseTaskItem]=[];@Published var caseActivity:[CaseActivityItem]=[]
@@ -166,6 +169,7 @@ struct FindingItem: Identifiable {
     @Published var validationTitle="Source validation"; @Published var validationText=""; @Published var validationPath=""
     @Published var validationReturn:DesktopDialog?
     @Published var dialog:DesktopDialog?; @Published var selectedPath=""
+    @Published var signalIntake:[String:Any]=[:]
     @Published var devices:[DeviceItem]=[]; @Published var sqliteFiles:[SQLiteItem]=[]; @Published var freeGiB:Double=0
     @Published var relatedAttachments:[Artifact]=[]
     lazy var inlineMedia=InlineMediaCache {key in
@@ -220,10 +224,9 @@ struct FindingItem: Identifiable {
         if investigatorView {p["presentation"]="investigator";if mode=="Contacts" {p["contact_basis"]=contactBasis}}
         if !sortField.isEmpty {p["sort_mode"]=sortMode;p["sort_field"]=sortField;p["sort_direction"]=sortAscending ? "asc":"desc"}
         if mode=="Messages" {p["app"]=appFilter;p["conversation"]=conversation}
-        let categories=["Messages":"messages","Calls":"calls","Contacts":"contacts","Media":"media","Trash photos":"media","Attachments":"attachments","Recovery":"recovery"]
         if mode == "Trash photos" {p["media_state"]="trash"}
         if mode == "Browser" {p["view_group"]="browser"}
-        if let category=categories[mode] {p["category"]=category};p["since"]=since;p["until"]=until;return p
+        if let category=EvidenceSidebarNavigation.category(for:mode,counts:categoryCounts) {p["category"]=category};p["since"]=since;p["until"]=until;return p
     }
     nonisolated static func bridge(_ p:[String:Any]) async throws -> Any {
         try await withCheckedThrowingContinuation { continuation in
@@ -325,12 +328,18 @@ struct FindingItem: Identifiable {
     }
     func loadRecords() async throws {
         guard source != nil else {rows=[];return}
-        var p=recordParams();let submitted=ReviewContext(p);p["offset"]=offset
-        let result=try await request("records",p) as? [String:Any] ?? [:]
-        rows=(result["records"] as? [[String:Any]] ?? []).map(Artifact.init)
-        investigatorSummary=result["summary"] as? [String:Any] ?? [:]
-        hasMore=result["has_more"] as? Bool ?? false;selected=rows.first?.id
-        displayedReview=submitted
+        let requestedOffset=offset
+        var p=recordParams();let submitted=ReviewContext(p);p["offset"]=requestedOffset
+        do {
+            let result=try await request("records",p) as? [String:Any] ?? [:]
+            rows=(result["records"] as? [[String:Any]] ?? []).map(Artifact.init)
+            investigatorSummary=result["summary"] as? [String:Any] ?? [:]
+            hasMore=result["has_more"] as? Bool ?? false;selected=rows.first?.id
+            displayedReview=submitted;displayedOffset=requestedOffset;reviewError=""
+        } catch {
+            offset=displayedOffset;reviewError=error.localizedDescription
+            throw error
+        }
     }
     func search() {offset=0;perform("Searching the complete selected source…") {try await self.loadRecords()} }
     func searchField(_ value:String, phone:Bool=false) {
@@ -341,7 +350,7 @@ struct FindingItem: Identifiable {
     }
     func setRange(_ days:Int) {
         if days==0 {rangeDays=0;since="";until="";search();return}
-        perform("Applying timeline range…") {
+        perform("Applying date range…") {
             var p=self.params();p["days"]=days;p["anchor"]=self.dateAnchor
             let r=try await self.request("date-range",p) as? [String:Any] ?? [:]
             self.rangeDays=days;self.since=r["since"] as? String ?? "";self.until=r["until"] as? String ?? "";self.offset=0
@@ -350,6 +359,7 @@ struct FindingItem: Identifiable {
     }
     func clearFilters() {searchMode="text";query="";appFilter="";conversation="";reportFilter="";sortField="";sortMode="text";since="";until="";rangeDays=0;search()}
     var emptyReason:String {
+        if !reviewError.isEmpty {return "Review request failed. No successful result is available for this request. " + reviewError}
         if reviewNeedsApply {return "The previous search returned no records. Apply your edited criteria to run a new search."}
         if source?.hasResults == false {return "No indexed artifact source is available for this evidence. Open Evidence & processing to inspect retained runs and their status."}
         if source?.records == 0 {return "No indexed records were returned for this scope. Inspect Evidence & processing and Coverage & review for unsupported data, failures or missing evidence. Zero parsed rows do not establish absence on the phone."}
@@ -391,9 +401,11 @@ struct FindingItem: Identifiable {
         perform("Importing evidence and running the platform parser…") {let r=try await self.request("import-evidence",["case":self.caseID,"path":url.path,"engine":"auto"]) as? [String:Any] ?? [:];self.sourceID=r["source_id"] as? String ?? "";self.mode="All artifacts";try await self.loadCase();self.notice=r["message"] as? String ?? "Processing finished. Check Sources.";self.showNotice=true}
     }
     func chooseAppBackup(_ kind:DesktopDialog) {
-        let p=NSOpenPanel();p.canChooseDirectories=false;p.message=kind == .whatsapp ? "Choose a WhatsApp UTF-8 text export.":"Choose a legacy Signal .backup file. You will need its known 30-digit passphrase."
-        if kind == .whatsapp {p.allowedContentTypes=[.plainText]}
-        guard p.runModal() == .OK,let url=p.url else {return};selectedPath=url.path;dialog=kind
+        let p=NSOpenPanel();p.canChooseDirectories=true;p.canChooseFiles=true
+        p.message=kind == .whatsapp ? "Choose a WhatsApp text export, ZIP or export folder with its media.":kind == .discord ? "Choose the customer's supplied Discord account data package ZIP or folder.":"Choose a supplied Signal backup. LAWLIET checks the format and decoder before asking for a passphrase."
+        guard p.runModal() == .OK,let url=p.url else {return};selectedPath=url.path
+        if kind == .signal {signalIntake=[:];perform("Checking Signal backup format and decoder…") {self.signalIntake=try await self.request("signal-preflight",["case":self.caseID,"path":url.path]) as? [String:Any] ?? [:];self.dialog=kind}}
+        else {dialog=kind}
     }
     func acquireDevices() {perform("Checking connected devices and host storage…") {
         let r=try await self.request("devices") as? [String:Any] ?? [:];self.freeGiB=r["free_gib"] as? Double ?? 0
@@ -512,16 +524,20 @@ struct ContentView: View {
     private var appearance:ColorScheme? {appearanceMode == "system" ? nil:(appearanceMode == "light" ? .light:.dark)}
     @StateObject private var m=AppModel()
     @State private var newCase=false
+    @State private var sqliteResultScope:SQLiteResultScope?
     @State private var caseName="";@State private var newID="";@State private var examiner=""
     @State private var threadSearch=""
     private var visibleThreads:[ConversationItem] {m.threads.filter{(m.appFilter.isEmpty || $0.app == m.appFilter) && (threadSearch.isEmpty || $0.label.localizedCaseInsensitiveContains(threadSearch) || $0.reports.localizedCaseInsensitiveContains(threadSearch))}}
     @State private var reportTable=true
+    @AppStorage("review.artifactLayout") private var artifactLayout="table"
+    @State private var artifactColumns=ArtifactTable.defaultColumns
+    private var usesArtifactTable:Bool {artifactLayout=="table" && !["Media","Trash photos","Attachments"].contains(m.mode)}
     @AppStorage("review.showFilters") private var showFilters=false
     @AppStorage("review.showInspector") private var showInspector=true
     @AppStorage("review.showSidebar") private var showSidebar=true
     @FocusState private var artifactSearchFocused:Bool
     @State private var dateOrder="dmy";@State private var zone="";@State private var secret=""
-    @State private var yearCentury=""
+    @State private var yearCentury="";@State private var chatPath=""
     private var centuryError:String {do {_ = try ChatDateInterpretation.centuryFields(yearCentury);return ""} catch {return error.localizedDescription}}
     @State private var selectedDevice="";@State private var budget=20;@State private var profile="messages"
     @State private var sharedPath="/sdcard/DCIM"
@@ -557,14 +573,17 @@ struct ContentView: View {
             else if dialog == .investigationEngine { EngineInvestigationView(m:m) }
             else if dialog == .draftReview { DraftReviewView(m:m) }
             else if dialog == .draftPreparation { DraftPreparationView(m:m) }
+            else if dialog == .examinationPreparation { ExaminationPreparationView(m:m) }
             else if dialog == .caseFolders {CaseFoldersView(m:m)}
             else if dialog == .reportHistory {ReportHistoryView(m:m)}
+            else if dialog == .mvtReview {MVTReviewView(m:m)}
             else { actionSheet(dialog) }
         }
-        .onChange(of:m.selectedPath){_ in yearCentury="";secret=""}
-        .onChange(of:m.currentCasePath){_ in yearCentury="";secret="";m.inlineMedia.setScope(m.currentCasePath)}
+        .onChange(of:m.selectedPath){_ in yearCentury="";secret="";chatPath="";zone=""}
+        .onChange(of:m.currentCasePath){_ in yearCentury="";secret="";sqliteResultScope=nil;m.inlineMedia.setScope(m.currentCasePath)}
         .onChange(of:m.dialog){value in if value != .signal {secret=""}}
         .sheet(isPresented:$m.previewShown){MediaPreview(path:m.previewPath,mime:m.previewMime)}
+        .sheet(item:$sqliteResultScope){scope in SQLiteResultReviewView(scope:scope).id(scope.id)}
         .alert("LAWLIET",isPresented:$m.showNotice){Button("OK",role:.cancel){}}message:{Text(m.notice)}
         .sheet(isPresented:$newCase){VStack(alignment:.leading,spacing:18){Text("New case").font(.system(size:18,weight:.semibold));TextField("Case ID (letters, digits, underscores or hyphens)",text:$newID);TextField("Case name",text:$caseName);TextField("Examiner",text:$examiner);Text("New case folder: \(m.creationWorkspace)").font(.caption).foregroundStyle(LawlietTheme.secondary);HStack{Button("Cancel"){newCase=false};Spacer();Button("Create case"){newCase=false;m.perform("Creating case…"){_ = try await AppModel.bridge(["action":"create","workspace":m.creationWorkspace,"id":newID,"name":caseName.isEmpty ? newID:caseName,"examiner":examiner]);m.workspace=m.creationWorkspace;m.caseID=newID;m.sourceID="";m.mode="Case overview";try await m.loadCases();newID="";caseName=""}}.disabled(newID.range(of:"^[A-Za-z0-9][A-Za-z0-9_-]{0,79}$",options:.regularExpression)==nil).keyboardShortcut(.defaultAction)}}.padding(28).frame(width:440)}
     }
@@ -601,6 +620,7 @@ struct ContentView: View {
             navigationButton("Evidence files","doc","Evidence files")
             navigationButton("Coverage & review","checklist","Coverage")
             Button {m.dialog = .investigationEngine} label:{Label("Agent investigation",systemImage:"magnifyingglass.circle")}.buttonStyle(.plain).padding(.horizontal,8).padding(.vertical,6).disabled(m.busy || m.caseID.isEmpty)
+            Button {m.dialog = .mvtReview} label:{Label("MVT observations",systemImage:"shield.lefthalf.filled")}.buttonStyle(.plain).padding(.horizontal,8).padding(.vertical,6).disabled(m.busy || m.caseID.isEmpty)
             Button {m.loadFindings()} label:{Label("Saved findings",systemImage:"bookmark")}.buttonStyle(.plain).padding(.horizontal,8).padding(.vertical,6).disabled(m.busy || m.caseID.isEmpty)
             Button {m.dialog = .reportHistory} label:{Label("Report history",systemImage:"doc.text.magnifyingglass")}.buttonStyle(.plain).padding(.horizontal,8).padding(.vertical,6).disabled(m.busy || m.caseID.isEmpty)
             Divider().padding(.vertical,5)
@@ -612,7 +632,7 @@ struct ContentView: View {
             }.frame(maxHeight:.infinity)
             Divider()
             HStack {
-                Menu {Button("Complete ALEAPP / iLEAPP output folder"){m.importFolder()};Button("Parsed JSONL / LEAPP TSV"){m.importReport()};Button("Acquired evidence · import & analyze"){m.importEvidence()};Button("WhatsApp text export"){m.chooseAppBackup(.whatsapp)};Button("Signal encrypted backup"){m.chooseAppBackup(.signal)}} label:{Label("Import",systemImage:"square.and.arrow.down")}.disabled(m.busy || m.caseID.isEmpty)
+                Menu {Button("Complete ALEAPP / iLEAPP output folder"){m.importFolder()};Button("Parsed JSONL / LEAPP TSV"){m.importReport()};Button("Acquired evidence · import & analyze"){m.importEvidence()};Divider();Button("WhatsApp chat & media export"){m.chooseAppBackup(.whatsapp)};Button("Discord account data package"){m.chooseAppBackup(.discord)};Button("Signal encrypted backup"){m.chooseAppBackup(.signal)}} label:{Label("Import",systemImage:"square.and.arrow.down")}.disabled(m.busy || m.caseID.isEmpty)
                 Menu {Button("App evidence coverage"){m.appCoverage()}.disabled(m.source == nil || m.source?.isCaseWide==true);Button("Validate selected source"){m.validateSource()}.disabled(m.source == nil || m.source?.isCaseWide==true);Button("Acquire connected phone"){m.acquireDevices()};Button("Android screen & control"){m.dialog = .deviceInteraction};Button("Analyze selected evidence"){m.dialog = .analyze}.disabled(m.source == nil || m.source?.isCaseWide==true);Button("SQLite recovery candidates"){m.recoveryFiles()}.disabled(m.source == nil || m.source?.isCaseWide==true)} label:{Label("Process",systemImage:"gearshape.2")}.disabled(m.busy || m.caseID.isEmpty)
             }.padding(.vertical,5)
             VStack(alignment:.leading,spacing:5) {
@@ -638,7 +658,7 @@ struct ContentView: View {
             } else if kind == .findings {
                 Text("Saved findings · \(m.findingTotal)").font(.title2)
                 Text("Whole case · saved record snapshots, oldest first. Notes are examiner interpretations, not original evidence.").font(.caption).foregroundStyle(LawlietTheme.secondary)
-                Button("Prepare draft from selected findings…"){m.dialog = .draftPreparation}.disabled(m.busy || m.findingTotal==0)
+                HStack {Button("Prepare draft from selected findings…"){m.dialog = .draftPreparation}.disabled(m.busy || m.findingTotal==0);Button("Scoped examination draft…"){m.dialog = .examinationPreparation}.disabled(m.busy || m.evidenceItems.isEmpty)}
                 ScrollView {LazyVStack(alignment:.leading,spacing:18) {
                     if m.findings.isEmpty {Text("No saved findings. Select a record and choose Save finding.").foregroundStyle(LawlietTheme.secondary)}
                     ForEach(m.findings) {finding in VStack(alignment:.leading,spacing:8) {
@@ -659,33 +679,54 @@ struct ContentView: View {
                 ScrollView {Text(m.validationText).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)}.frame(height:420)
                 if !m.validationPath.isEmpty {Button("Reveal full validation report"){NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath:m.validationPath)])}}
             } else if kind == .whatsapp {
-                Text("Import WhatsApp export").font(.title2);Text("Select the date order used in the text file. Leave timezone blank to retain unknown local time.").foregroundStyle(LawlietTheme.secondary)
+                Text("Import WhatsApp export").font(.title2);Text("Text, ZIP or export folder. Supplied media stays linked to its messages where filenames match. Select the date order used in the transcript; unknown local time remains undated.").font(.callout).foregroundStyle(LawlietTheme.secondary)
                 Picker("Date order",selection:$dateOrder){Text("Day / month / year").tag("dmy");Text("Month / day / year").tag("mdy");Text("Year / month / day").tag("ymd")};TextField("Timezone, e.g. America/New_York",text:$zone)
                 TextField("Century for two-digit years, e.g. 2000 (optional)",text:$yearCentury).accessibilityLabel("Declared year century")
                 Text("Leave century blank when unknown; two-digit years stay undated. Timezone and century are independent declarations.").font(.caption).foregroundStyle(LawlietTheme.secondary)
+                DisclosureGroup("Multiple transcripts in this export?"){TextField("Relative transcript path (optional)",text:$chatPath)}
+                Text("An export can omit history and media. Sender names are labels supplied in the export.").font(.caption).foregroundStyle(LawlietTheme.secondary)
                 if !centuryError.isEmpty {Text(centuryError).font(.caption).foregroundStyle(.orange)}
                 Button("Import") {
                     guard let fields=try? ChatDateInterpretation.centuryFields(yearCentury) else {return}
-                    var values:[String:Any]=["case":m.caseID,"path":m.selectedPath,"date_order":dateOrder,"timezone":zone]
+                    var values:[String:Any]=["case":m.caseID,"path":m.selectedPath,"date_order":dateOrder,"timezone":zone,"chat_path":chatPath]
                     values.merge(fields){_,new in new}
-                    m.dialog=nil;m.perform("Importing WhatsApp messages…"){let result=try await m.request("import-chat",values) as? [String:Any] ?? [:];m.sourceID=result["run_id"] as? String ?? "";m.mode="Messages";try await m.loadCase(preferredEvidence:result["evidence_id"] as? String);m.notice="Imported \(result["records"] as? Int ?? 0) chat records. Unknown dates remain undated; original export bytes and interpretation parameters are retained.";m.showNotice=true}
+                    m.dialog=nil;m.perform("Importing WhatsApp messages and supplied media…"){let result=try await m.request("import-chat",values) as? [String:Any] ?? [:];m.sourceID=result["run_id"] as? String ?? "";m.mode="Messages";try await m.loadCase(preferredEvidence:result["evidence_id"] as? String);m.notice="\(result["status"] as? String ?? "Unknown status") · \(result["chat_records"] as? Int ?? 0) chat records · \(result["media_records"] as? Int ?? 0) media records · \(result["undated_records"] as? Int ?? 0) undated. Review missing media and limitations in Evidence & processing.";m.showNotice=true}
                 }.disabled(!centuryError.isEmpty || m.busy)
+            } else if kind == .discord {
+                Text("Import Discord package").font(.title2)
+                Text("Indexes messages sent by the account owner from a supplied JSON or legacy CSV data package. This is not the full conversation; deleted messages are not included.").font(.callout).foregroundStyle(LawlietTheme.secondary)
+                TextField("Timezone for offset-free timestamps (optional)",text:$zone)
+                Text("Use an IANA zone only when established from the source. Otherwise those messages stay undated. Attachment URLs remain references; LAWLIET does not download them.").font(.caption).foregroundStyle(LawlietTheme.secondary)
+                Button("Import package"){m.dialog=nil;m.perform("Importing Discord messages…"){let result=try await m.request("import-discord",["case":m.caseID,"path":m.selectedPath,"timezone":zone]) as? [String:Any] ?? [:];m.sourceID=result["source_id"] as? String ?? "";m.mode="Messages";try await m.loadCase(preferredEvidence:result["evidence_id"] as? String);m.notice="\(result["status"] as? String ?? "Unknown status") · \(result["records"] as? Int ?? 0) indexed Discord records. Check Evidence & processing for coverage and any rejected records.";m.showNotice=true}}.disabled(m.busy)
             } else if kind == .signal {
-                Text("Decrypt Signal backup").font(.title2);Text("Legacy Android .backup format only. Original bytes are retained. New Signal backup formats require a different decoder.").foregroundStyle(LawlietTheme.secondary)
-                SecureField("Known 30-digit passphrase",text:$secret)
-                Button("Decrypt & import"){let password=secret;secret="";m.dialog=nil;m.perform("Decrypting supplied Signal backup…"){let result=try await m.request("decrypt-signal",["case":m.caseID,"path":m.selectedPath,"passphrase":password]) as? [String:Any] ?? [:];m.sourceID="";m.mode="Messages";try await m.loadCase(preferredEvidence:result["evidence_id"] as? String)}}.disabled(secret.isEmpty)
+                Text("Signal backup intake").font(.title2)
+                if m.signalIntake["ready"] as? Bool == true {
+                    Text("Candidate legacy Android backup. The decoder must validate its format and key. Original bytes are preserved; successful output is indexed automatically.").font(.callout).foregroundStyle(LawlietTheme.secondary)
+                    SecureField("Known 30-digit passphrase",text:$secret)
+                    Button("Decrypt & import"){let password=secret;secret="";m.dialog=nil;m.perform("Decrypting supplied Signal backup…"){let result=try await m.request("decrypt-signal",["case":m.caseID,"path":m.selectedPath,"passphrase":password]) as? [String:Any] ?? [:];m.sourceID="";m.mode="Messages";try await m.loadCase(preferredEvidence:result["evidence_id"] as? String);m.notice="\(result["status"] as? String ?? "Unknown status") · \(result["message_records"] as? Int ?? 0) Signal message records indexed. Review processing details for parser errors and unsupported data.";m.showNotice=true}}.disabled(secret.isEmpty || m.busy)
+                } else {
+                    Text(m.signalIntake["reason"] as? String ?? (m.signalIntake["tool"] as? [String:Any])?["setup"] as? String ?? "Signal decoder is unavailable.").font(.callout).textSelection(.enabled)
+                    Text("No decryption ran. For an already decoded database or extraction, use Acquired evidence · import & analyze.").font(.caption).foregroundStyle(LawlietTheme.secondary)
+                }
             } else if kind == .acquire {
                 Text("Acquire connected phone").font(.title2);Text("Host free space: \(m.freeGiB.formatted()) GiB. Collection stops at its storage limit and reserves room for evidence intake.").foregroundStyle(LawlietTheme.secondary)
                 Picker("Device",selection:$selectedDevice){Text("Choose device").tag("");ForEach(m.devices){d in Text("\(d.platform) · \(d.id) · \(d.status)").tag(d.id)}}
-                Picker("Android scope",selection:$profile){Text("Telephony messages").tag("messages");Text("Contacts · readable provider").tag("contacts-provider");Text("Gallery Trash · accessible photos").tag("trash-photos");Text("Logical triage + telephony").tag("logical");Text("Shared files · explicit folder").tag("files");Text("Private apps · existing root required").tag("private-apps")}
+                if m.devices.first(where:{$0.id==selectedDevice})?.platform == "android" {
+                Picker("Android scope",selection:$profile){Text("Telephony messages").tag("messages");Text("SMS · readable provider").tag("sms-provider");Text("Contacts · readable provider").tag("contacts-provider");Text("Gallery Trash · accessible photos").tag("trash-photos");Text("Logical triage + telephony").tag("logical");Text("Shared files · explicit folder").tag("files");Text("Private apps · existing root required").tag("private-apps")}
+                if profile=="sms-provider" {Text("Reads up to 1,000 SMS records from the current Android user where permitted, with a 64 MiB budget. Queries are not a transaction-wide snapshot. MMS, RCS and private app messages are outside this scope.").font(.caption).foregroundStyle(LawlietTheme.secondary)}
                 if profile=="trash-photos" {Text("Reads up to 1,000 entries under Samsung shared-storage Trash and copies recognized photos with matching before/after hashes. Other apps and permanently deleted files are outside this scope. No restore or delete is performed.").font(.caption).foregroundStyle(LawlietTheme.secondary)}
                 if profile=="contacts-provider" {Text("Names, phone numbers and email addresses from readable contacts. Limited to 1,000 contacts and 64 MiB; live queries are not an atomic snapshot.").font(.caption).foregroundStyle(LawlietTheme.secondary)}
                 if profile=="files" {TextField("Android shared folder",text:$sharedPath);Text("Only this folder is requested. Private app storage remains outside shared-file access.").font(.caption).foregroundStyle(LawlietTheme.secondary)}
-                if profile=="contacts-provider" && m.devices.first(where:{$0.id==selectedDevice})?.platform=="android" {Text("Contacts export budget: 64 MiB").font(.caption)} else {Stepper("Storage budget: \(budget) GiB",value:$budget,in:1...500)}
-                Text("iPhone uses a logical backup, not a full filesystem image. Unlock and trust the device. Live collection changes device state. Private app access is not guaranteed.").font(.caption).foregroundStyle(LawlietTheme.secondary)
-                Button("Assess Android access"){m.assessAndroid(selectedDevice)}.disabled(m.busy || !m.devices.contains(where:{$0.id==selectedDevice && $0.platform=="android"}))
+                Button("Assess Android access"){m.assessAndroid(selectedDevice)}.disabled(m.busy)
+                }
+                if ["contacts-provider","sms-provider"].contains(profile) && m.devices.first(where:{$0.id==selectedDevice})?.platform=="android" {Text("Provider export budget: 64 MiB").font(.caption)} else {Stepper("Storage limit: \(budget) GiB",value:$budget,in:1...500)}
+                if m.devices.first(where:{$0.id==selectedDevice})?.platform == "ios" {
+                    Text("iPhone · logical backup").font(.headline)
+                    Text("This method requests all backup-eligible data. It cannot select only messages or contacts. The storage limit stops an oversized backup; it does not select a smaller dataset. To review without another backup, open an existing case or import a supplied export.").font(.caption).foregroundStyle(LawlietTheme.secondary)
+                    Text("Unlock and trust the iPhone. A logical backup is not a full filesystem image. Live collection changes device state; private app access is not guaranteed.").font(.caption).foregroundStyle(LawlietTheme.secondary)
+                }
                 Button("Check storage & tools"){guard let d=m.devices.first(where:{$0.id==selectedDevice}) else {return};m.perform("Checking acquisition readiness…"){let r=try await m.request("preflight",["case":m.caseID,"platform":d.platform,"profile":profile,"max_gib":budget]) as? [String:Any] ?? [:];let required=(r["required_bytes"] as? Double ?? 0)/1073741824;m.notice="\(r["ready"] as? Bool == true ? "Storage and tools ready" : "Not ready"). Required free space: \(required.formatted()) GiB. This reserves acquisition and evidence copies; phone size and access are not guaranteed.";m.showNotice=true}}.disabled(selectedDevice.isEmpty || m.busy)
-                Button("Start acquisition"){guard let d=m.devices.first(where:{$0.id==selectedDevice}) else {return};m.dialog=nil;m.perform("Collecting phone data; keep the device connected…"){let r=try await m.request("collect",["case":m.caseID,"serial":d.id,"platform":d.platform,"profile":profile,"pulls":profile=="files" ? [sharedPath] : [],"max_gib":budget]) as? [String:Any] ?? [:];m.sourceID="";try await m.loadCase();m.notice="Collection status: \(r["status"] as? String ?? "unknown"). Check Sources for coverage.";m.showNotice=true}}.disabled(selectedDevice.isEmpty)
+                Button(m.devices.first(where:{$0.id==selectedDevice})?.platform == "ios" ? "Start logical backup" : "Start acquisition"){guard let d=m.devices.first(where:{$0.id==selectedDevice}) else {return};m.dialog=nil;m.perform("Collecting phone data; keep the device connected…"){let r=try await m.request("collect",["case":m.caseID,"serial":d.id,"platform":d.platform,"profile":d.platform=="android" ? profile : "triage","pulls":d.platform=="android" && profile=="files" ? [sharedPath] : [],"max_gib":budget]) as? [String:Any] ?? [:];m.sourceID="";try await m.loadCase();m.notice="Overall: \(r["status"] as? String ?? "unknown") · collection: \(r["collection_status"] as? String ?? "unknown"). Check Evidence & processing for parsing status and coverage.";m.showNotice=true}}.disabled(selectedDevice.isEmpty)
             } else if kind == .analyze {
                 Text("Analyze selected evidence").font(.title2);Picker("Engine",selection:$engine){Text("Automatic · ALEAPP / iLEAPP").tag("auto");Text("Native + media index").tag("native");Text("iLEAPP (iOS)").tag("ileapp");Text("ALEAPP (Android)").tag("aleapp");Text("ExifTool media metadata").tag("exiftool")}
                 Text("Optional engines must be configured in this workspace. Analysis uses working copies.").foregroundStyle(LawlietTheme.secondary)
@@ -695,7 +736,7 @@ struct ContentView: View {
             } else if kind == .attachments {
                 Text("Linked attachments").font(.title2)
                 if m.relatedAttachments.isEmpty {Text("No local attachment links for this source. Import and index the originating extraction to examine available bytes.").foregroundStyle(LawlietTheme.secondary)}
-                ScrollView {VStack(alignment:.leading,spacing:12){ForEach(m.relatedAttachments){a in HStack{VStack(alignment:.leading){Text(a.title);Text(a.body).font(.caption).foregroundStyle(LawlietTheme.secondary)};Spacer();Button("Preview"){m.dialog=nil;m.previewSelected(a)}.disabled(a.body != "available")}}}}.frame(maxHeight:360)
+                ScrollView {VStack(alignment:.leading,spacing:12){ForEach(m.relatedAttachments){a in HStack{VStack(alignment:.leading){Text(a.title);Text(a.body).font(.caption).foregroundStyle(LawlietTheme.secondary)};Spacer();Button("Preview"){m.dialog=nil;m.previewSelected(a)}.disabled(!a.mediaAvailable)}}}}.frame(maxHeight:360)
             } else {
                 Text("SQLite recovery candidates").font(.title2);Text("Carved fragments need corroboration. No candidate does not establish that nothing was deleted. Original databases are preserved.").foregroundStyle(LawlietTheme.secondary)
                 Picker("Database",selection:$sqliteID){Text("Choose database").tag(0);ForEach(m.sqliteFiles){f in Text(f.path).tag(f.id)}}
@@ -731,6 +772,9 @@ struct ContentView: View {
                 VStack(spacing:0) {ForEach(m.runItems) {r in
                     VStack(alignment:.leading,spacing:10) {
                         HStack {VStack(alignment:.leading,spacing:5){Text(r.engine).fontWeight(.medium);Text(r.id).font(.system(size:11,design:.monospaced)).foregroundStyle(LawlietTheme.secondary)};Spacer();Text("\(r.records.formatted()) rows").font(.caption);Text(r.status.capitalized).font(.caption).padding(.horizontal,9).padding(.vertical,4).background(LawlietTheme.border.opacity(0.5)).cornerRadius(4)}
+                        if r.engine=="sqlite-workspace/1" && r.status=="complete" {
+                            Button("View query results"){sqliteResultScope=SQLiteResultScope(workspace:m.workspace,caseID:m.caseID,runID:r.id)}.disabled(m.busy)
+                        }
                         if !r.summary.isEmpty {Text(r.summary).font(.caption).foregroundStyle(LawlietTheme.secondary).textSelection(.enabled)}
                         DisclosureGroup("Processing details") {Text(r.detail).font(.system(size:11,design:.monospaced)).textSelection(.enabled)}
                     }.padding(14);Divider()
@@ -744,7 +788,7 @@ struct ContentView: View {
     }
     var header: some View {
         VStack(alignment:.leading,spacing:7){HStack {VStack(alignment:.leading,spacing:3){Text(m.mode=="Case overview" ? m.caseName:m.mode=="Sources" ? "Evidence & processing":m.reviewTitle).font(.system(size:18,weight:.semibold)).lineLimit(1);if m.mode != "Case overview" {Text(m.caseName).font(.system(size:11)).foregroundStyle(LawlietTheme.secondary).lineLimit(1)}};Spacer();Button{m.perform("Verifying imported evidence…"){let r=try await m.request("verify",["case":m.caseID]) as? [String:Any] ?? [:];m.verification=r["ok"] as? Bool == true ? "Passed · \(r["files_checked"] as? Int ?? 0) files":"Integrity check FAILED";m.notice="Integrity: \(r["ok"] as? Bool == true ? "passed":"FAILED") · \(r["files_checked"] as? Int ?? 0) imported files and \(r["findings_checked"] as? Int ?? 0) saved findings checked. This does not establish acquisition completeness.";m.showNotice=true}}label:{Label("Verify",systemImage:"checkmark.shield")}.disabled(m.busy || m.caseID.isEmpty);if m.mode != "Case overview" && m.mode != "Sources" {Button{m.exportRows()}label:{Label("Export source records",systemImage:"square.and.arrow.up")}.disabled(m.busy || m.source == nil || m.mode == "Sources" || m.reviewNeedsApply)}}
-            if m.mode != "Case overview" && m.mode != "Sources" {HStack {Text("PARSED SOURCE").font(.caption2).foregroundStyle(LawlietTheme.secondary);Picker("Source",selection:$m.sourceID){Text("No parsed source").tag("");ForEach(m.sources){Text($0.label).tag($0.id)}}.labelsHidden().disabled(m.busy).onChange(of:m.sourceID){_ in if !m.busy {m.perform("Loading source…"){try await m.loadSource()}}};if let s=m.source {Text("\(s.records.formatted()) \(s.rowUnit)").font(.caption).monospacedDigit().foregroundStyle(LawlietTheme.secondary)};Spacer();Picker("Review view",selection:$m.investigatorView){Text("Investigator").tag(true);Text("Source records").tag(false)}.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Review view").frame(width:225).disabled(m.busy).onChange(of:m.investigatorView){_ in m.sortField="";m.search()};if m.mode=="Contacts" && m.investigatorView {Picker("Contact representations",selection:$m.contactBasis){Text("Preferred contacts").tag("auto");Text("Source contacts").tag("source");Text("Report entries").tag("reports");Text("All representations").tag("all")}.labelsHidden().accessibilityLabel("Contact representations").frame(width:170).onChange(of:m.contactBasis){_ in m.search()}}}}
+            if m.mode != "Case overview" && m.mode != "Sources" {HStack {Text("PARSED SOURCE").font(.caption2).foregroundStyle(LawlietTheme.secondary);Picker("Source",selection:$m.sourceID){Text("No parsed source").tag("");ForEach(m.sources){Text($0.label).tag($0.id)}}.labelsHidden().disabled(m.busy).onChange(of:m.sourceID){_ in if !m.busy {m.perform("Loading source…"){try await m.loadSource()}}};if let s=m.source {Text("\(s.records.formatted()) \(s.rowUnit) · source total").font(.caption).monospacedDigit().foregroundStyle(LawlietTheme.secondary).help("Total indexed rows in the selected source, before view and search filters. The table below is paginated.")};Spacer();Picker("Review view",selection:$m.investigatorView){Text("Investigator").tag(true);Text("Source records").tag(false)}.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Review view").frame(width:225).disabled(m.busy).onChange(of:m.investigatorView){_ in m.sortField="";m.search()};if m.mode=="Contacts" && m.investigatorView {Picker("Contact representations",selection:$m.contactBasis){Text("Preferred contacts").tag("auto");Text("Source contacts").tag("source");Text("Report entries").tag("reports");Text("All representations").tag("all")}.labelsHidden().accessibilityLabel("Contact representations").frame(width:170).onChange(of:m.contactBasis){_ in m.search()}}}}
         }.padding(.horizontal,16).padding(.vertical,12)
     }
     var emptyState: some View {VStack(spacing:18){Image(systemName:"tray.and.arrow.down").font(.system(size:44)).foregroundStyle(accent);Text("Bring your parsed evidence into view").font(.title2);Text("Create a case, then import the complete ALEAPP or iLEAPP output folder.\nReview every indexed report here, with search and timeline filters.").multilineTextAlignment(.center).foregroundStyle(LawlietTheme.secondary);Button("Import LEAPP output folder"){m.importFolder()}.disabled(m.caseID.isEmpty || m.busy)}.frame(maxWidth:.infinity,maxHeight:.infinity)}
@@ -755,7 +799,7 @@ struct ContentView: View {
         }
     }
     var reviewContent: some View {
-        VStack(spacing:0){HStack{Button {artifactSearchFocused=true} label:{Image(systemName:"magnifyingglass")}.buttonStyle(.plain).keyboardShortcut("f",modifiers:.command).help("Search this source · ⌘F");Picker("Search type",selection:$m.searchMode){Text("Text").tag("text");Text("Phone number").tag("phone")}.labelsHidden().accessibilityLabel("Search type").frame(width:115).disabled(m.busy);TextField(m.searchMode == "phone" ? "Phone number · ignore formatting…":"String search · all parsed fields in this view…",text:$m.query).textFieldStyle(.plain).focused($artifactSearchFocused).onSubmit{m.search()};if m.mode=="Messages" {Picker("App (messages only)",selection:$m.appFilter){Text("All apps").tag("");ForEach(m.appNames,id:\.self){Text($0).tag($0)}}.labelsHidden().accessibilityLabel("App (messages only)").frame(width:155).disabled(m.mode != "Messages" || m.busy).onChange(of:m.appFilter){_ in if !m.busy {m.conversation="";m.search()}}};Button("Search"){m.search()}.disabled(m.busy);Button {showFilters.toggle()} label:{Label("Filters",systemImage:"line.3.horizontal.decrease.circle")}.tint(showFilters ? accent:.secondary);Button {showInspector.toggle()} label:{Image(systemName:"sidebar.right")}.help(showInspector ? "Hide record details":"Show record details").accessibilityLabel("Toggle record details")}.padding(8).background(LawlietTheme.panel).overlay(RoundedRectangle(cornerRadius:4).stroke(LawlietTheme.border)).padding(.horizontal,16)
+        VStack(spacing:0){HStack{Button {artifactSearchFocused=true} label:{Image(systemName:"magnifyingglass")}.buttonStyle(.plain).keyboardShortcut("f",modifiers:.command).help("Search this source · ⌘F");Picker("Search type",selection:$m.searchMode){Text("Text").tag("text");Text("Phone number").tag("phone")}.labelsHidden().accessibilityLabel("Search type").frame(width:115).disabled(m.busy);TextField(m.searchMode == "phone" ? "Phone number · ignore formatting…":"String search · all parsed fields in this view…",text:$m.query).textFieldStyle(.plain).focused($artifactSearchFocused).onSubmit{m.search()};if m.mode=="Messages" {Picker("App (messages only)",selection:$m.appFilter){Text("All apps").tag("");ForEach(m.appNames,id:\.self){Text($0).tag($0)}}.labelsHidden().accessibilityLabel("App (messages only)").frame(width:155).disabled(m.mode != "Messages" || m.busy).onChange(of:m.appFilter){_ in if !m.busy {m.conversation="";m.search()}}};Button("Search"){m.search()}.disabled(m.busy);if !["Media","Trash photos","Attachments"].contains(m.mode) {Picker("Layout",selection:$artifactLayout){Text("Table").tag("table");Text("Cards").tag("cards")}.pickerStyle(.segmented).labelsHidden().accessibilityLabel("Artifact layout").frame(width:120);if usesArtifactTable && m.reportFilter.isEmpty {Menu {ForEach(ArtifactTable.columnChoices,id:\.id){column in Toggle(column.title,isOn:Binding(get:{artifactColumns.contains(column.id)},set:{enabled in if enabled {artifactColumns.append(column.id)} else if artifactColumns.count>1 {artifactColumns.removeAll{$0==column.id}}})).disabled(artifactColumns.count==1 && artifactColumns.contains(column.id))}}label:{Image(systemName:"tablecells")}.menuStyle(.borderlessButton).fixedSize().help("Visible columns").accessibilityLabel("Visible columns")}};Button {showFilters.toggle()} label:{Label("Filters",systemImage:"line.3.horizontal.decrease.circle")}.tint(showFilters ? accent:.secondary);Button {showInspector.toggle()} label:{Image(systemName:"sidebar.right")}.help(showInspector ? "Hide record details":"Show record details").accessibilityLabel("Toggle record details")}.padding(8).background(LawlietTheme.panel).overlay(RoundedRectangle(cornerRadius:4).stroke(LawlietTheme.border)).padding(.horizontal,16)
             if m.searchMode == "phone" {Text("Matches complete digits in known phone fields. No country-code guessing or identity attribution.").font(.caption).foregroundStyle(LawlietTheme.secondary).padding(.horizontal,16).padding(.top,6)}
             if showFilters {
             HStack {
@@ -778,7 +822,7 @@ struct ContentView: View {
                 }.disabled(m.busy).padding(.horizontal,16).padding(.top,8)
             }
             }
-            if m.mode=="Timeline" {
+            if showFilters || m.mode=="Timeline" || m.mode=="Messages" {
                 HStack {Text("Range").font(.caption);Button("All time"){m.setRange(0)};ForEach([7,30,60,90],id:\.self){days in Button("\(days) days"){m.setRange(days)}.tint(m.rangeDays==days ? accent:.gray)}
                     Picker("Ending",selection:$m.dateAnchor){Text("Latest source record").tag("latest");Text("Now").tag("now")}.frame(width:250).onChange(of:m.dateAnchor){_ in if m.rangeDays>0 && !m.busy {m.setRange(m.rangeDays)}};Spacer()
                 }.disabled(m.busy).padding(.horizontal,16).padding(.top,8)
@@ -787,12 +831,12 @@ struct ContentView: View {
             ReviewContextView(m:m)
             HSplitView {
                 if m.mode=="Messages" {VStack(alignment:.leading,spacing:0){Text("SOURCE THREADS · \(visibleThreads.count)").font(.caption2).foregroundStyle(LawlietTheme.secondary).padding(12);TextField("Find conversation…",text:$threadSearch).textFieldStyle(.roundedBorder).padding(.horizontal,10);List(selection:Binding<String?>(get:{m.conversation},set:{value in guard !m.busy else {return};m.conversation=value ?? "";m.search()})) {Text("All conversations").tag("");ForEach(visibleThreads){t in VStack(alignment:.leading,spacing:4){Text(t.label).lineLimit(1);Text("\(t.app) · \(t.count) rows").font(.caption).foregroundStyle(LawlietTheme.secondary);if !t.reports.isEmpty {Text(t.reports).font(.caption2).foregroundStyle(LawlietTheme.secondary).lineLimit(2).help(t.reports)}}.padding(.vertical,5).tag(t.id)}}.disabled(m.busy).listStyle(.plain).scrollContentBackground(.hidden).background(LawlietTheme.panel)}.frame(minWidth:185,idealWidth:220,maxWidth:290)}
-                VStack(spacing:0){if m.mode == "Trash photos" {Text("Recorded Trash acquisitions only. This view does not scan the phone or establish permanent-deletion recovery.").font(.caption).foregroundStyle(LawlietTheme.secondary).padding(12)};if m.rows.isEmpty {Text(m.busy ? "Loading…":m.emptyReason).multilineTextAlignment(.center).padding(24).foregroundStyle(LawlietTheme.secondary).frame(maxWidth:.infinity,maxHeight:.infinity)}else if reportTable && !m.reportFilter.isEmpty && m.rows.contains(where:{!$0.reportFields.isEmpty}) {upstreamTable}else{List{ForEach(m.rows){r in Button {m.selected=r.id} label:{HStack(spacing:10){if r.autoImagePreview {InlineMediaView(cache:m.inlineMedia,key:m.imageKey(r,compact:true),compact:true).id(m.imageKey(r,compact:true))};VStack(alignment:.leading,spacing:4){HStack{Text(r.kindLabel).font(.system(size:10,weight:.semibold)).foregroundStyle(LawlietTheme.secondary);Spacer();Text(r.dateLabel).font(.system(size:10)).foregroundStyle(LawlietTheme.secondary)};if !r.investigatorKind.isEmpty && r.category != "messages" {Text(r.title).font(.system(size:12,weight:.medium)).lineLimit(1)};Text(r.body.isEmpty ? "[No text body]":r.body).lineLimit(2).font(.system(size:12));Text(r.observations.count>1 ? "\(r.observations.count) source observations · \(r.originLabel)":r.investigatorKind.isEmpty ? r.title:r.originLabel).font(.caption).foregroundStyle(LawlietTheme.secondary).lineLimit(1)}}.foregroundStyle(LawlietTheme.text).padding(.vertical,9).padding(.horizontal,6).frame(maxWidth:.infinity,alignment:.leading)}.buttonStyle(.plain).listRowBackground(m.selected == r.id ? LawlietTheme.selection:LawlietTheme.panel).overlay(alignment:.leading){if m.selected == r.id {RoundedRectangle(cornerRadius:2).fill(accent).frame(width:3).padding(.vertical,7)}}.tag(r.id)}}.listStyle(.inset).focusable().onMoveCommand {direction in
+                VStack(spacing:0){if m.mode == "Trash photos" {Text("Recorded Trash acquisitions only. This view does not scan the phone or establish permanent-deletion recovery.").font(.caption).foregroundStyle(LawlietTheme.secondary).padding(12)};if m.rows.isEmpty {Text(m.busy ? "Loading…":m.emptyReason).multilineTextAlignment(.center).padding(24).foregroundStyle(LawlietTheme.secondary).frame(maxWidth:.infinity,maxHeight:.infinity)}else if reportTable && !m.reportFilter.isEmpty && m.rows.contains(where:{!$0.reportFields.isEmpty}) {upstreamTable}else if usesArtifactTable {ArtifactTable(rows:m.rows,selection:$m.selected,visibleColumns:artifactColumns)}else{List{ForEach(m.rows){r in Button {m.selected=r.id} label:{HStack(spacing:10){if r.autoImagePreview {InlineMediaView(cache:m.inlineMedia,key:m.imageKey(r,compact:true),compact:true).id(m.imageKey(r,compact:true))};VStack(alignment:.leading,spacing:4){HStack{Text(r.kindLabel).font(.system(size:10,weight:.semibold)).foregroundStyle(LawlietTheme.secondary);Spacer();Text(r.dateLabel).font(.system(size:10)).foregroundStyle(LawlietTheme.secondary)};if !r.investigatorKind.isEmpty && r.category != "messages" {Text(r.title).font(.system(size:12,weight:.medium)).lineLimit(1)};Text(r.body.isEmpty ? "[No text body]":r.body).lineLimit(2).font(.system(size:12));Text(r.observations.count>1 ? "\(r.observations.count) source observations · \(r.originLabel)":r.investigatorKind.isEmpty ? r.title:r.originLabel).font(.caption).foregroundStyle(LawlietTheme.secondary).lineLimit(1)}}.foregroundStyle(LawlietTheme.text).padding(.vertical,9).padding(.horizontal,6).frame(maxWidth:.infinity,alignment:.leading)}.buttonStyle(.plain).listRowBackground(m.selected == r.id ? LawlietTheme.selection:LawlietTheme.panel).overlay(alignment:.leading){if m.selected == r.id {RoundedRectangle(cornerRadius:2).fill(accent).frame(width:3).padding(.vertical,7)}}.tag(r.id)}}.listStyle(.inset).focusable().onMoveCommand {direction in
                         guard !m.busy, !m.rows.isEmpty else {return}
                         let current=m.rows.firstIndex(where:{$0.id==m.selected}) ?? 0
                         if direction == .down {m.selected=m.rows[min(current+1,m.rows.count-1)].id}
                         if direction == .up {m.selected=m.rows[max(current-1,0)].id}
-                    }.scrollContentBackground(.hidden).background(LawlietTheme.panel)};HStack{Button("Previous"){m.offset=max(0,m.offset-100);m.perform("Loading previous page…"){try await m.loadRecords()}}.disabled(m.busy || m.reviewNeedsApply || m.offset==0);Spacer();Text("\(m.rows.isEmpty ? 0:m.offset+1)–\(m.offset+m.rows.count)").font(.caption).monospacedDigit();Spacer();Button("Next"){m.offset+=100;m.perform("Loading next page…"){try await m.loadRecords()}}.disabled(m.busy || m.reviewNeedsApply || !m.hasMore)}.padding(12)}.frame(minWidth:290)
+                    }.scrollContentBackground(.hidden).background(LawlietTheme.panel)};HStack{Button("Previous"){m.offset=max(0,m.offset-100);m.perform("Loading previous page…"){try await m.loadRecords()}}.disabled(m.busy || m.reviewNeedsApply || m.offset==0);Spacer();Text("\(m.rows.isEmpty ? 0:m.displayedOffset+1)–\(m.displayedOffset+m.rows.count)").font(.caption).monospacedDigit();Spacer();Button("Next"){m.offset+=100;m.perform("Loading next page…"){try await m.loadRecords()}}.disabled(m.busy || m.reviewNeedsApply || !m.hasMore)}.padding(12)}.frame(minWidth:290)
                 if showInspector {ScrollView {if let r=m.selectedArtifact {VStack(alignment:.leading,spacing:10){Text("RECORD DETAILS").font(.caption2).foregroundStyle(LawlietTheme.secondary);if r.observations.count>1 {Text("\(r.observations.count) source observations · choose one under Evidence provenance to cite.").font(.caption).foregroundStyle(LawlietTheme.secondary)} else {Button("Save finding"){m.prepareFinding()}.disabled(m.busy)};Text(r.title).font(.headline);Text(r.dateLabel).font(.caption).foregroundStyle(LawlietTheme.secondary);if !r.investigatorNote.isEmpty {DisclosureGroup("Entry interpretation"){Text(r.investigatorNote).font(.caption).foregroundStyle(LawlietTheme.secondary)}};if !r.reviewNote.isEmpty {DisclosureGroup("Interpretation notes"){Text(r.reviewNote).font(.caption).textSelection(.enabled)}};if r.reportFields.isEmpty || r.category=="messages" {Text(r.body.isEmpty ? "No text body in this record.":r.body).font(.system(size:13)).textSelection(.enabled)} else {DisclosureGroup("Record summary"){Text(r.body).font(.system(size:12)).textSelection(.enabled)}};if r.mediaObservationCount > 1 {Text("One media item · \(r.mediaObservationCount) preserved source/parser observations").font(.caption).foregroundStyle(LawlietTheme.secondary)};if r.trashSource {Text("Recorded acquisition: Gallery Trash. This is not proof of permanent-deletion recovery.").font(.caption).foregroundStyle(LawlietTheme.secondary)};if r.category=="messages" {Button("View linked attachments"){m.showAttachments()}.disabled(m.busy)};if r.taskSnapshot {InlineMediaView(cache:m.inlineMedia,key:m.imageKey(r)).id(m.imageKey(r));Button("Open larger preview"){m.previewSelected()}.disabled(m.busy);Text("App snapshot, not proof of physical presence. Task activity time is not necessarily image capture time.").font(.caption).foregroundStyle(LawlietTheme.secondary)};if r.category=="media" || r.category=="attachments" {if r.autoImagePreview {InlineMediaView(cache:m.inlineMedia,key:m.imageKey(r)).id(m.imageKey(r))};Button(r.autoImagePreview ? "Open larger preview":"Verify & open media"){m.previewSelected()}.disabled(m.busy)};if !r.reportFields.isEmpty {VStack(alignment:.leading,spacing:12){Text(!r.investigatorKind.isEmpty ? "INVESTIGATOR FIELDS":r.category == "media" ? "MEDIA METADATA" : "REPORT FIELDS").font(.caption2).foregroundStyle(LawlietTheme.secondary);ForEach(r.reportFields){field in VStack(alignment:.leading,spacing:4){HStack {Text(field.id).font(.caption).foregroundStyle(LawlietTheme.secondary);Spacer();if !field.value.isEmpty {Button {m.searchField(field.value)} label:{Image(systemName:"magnifyingglass")}.buttonStyle(.borderless).help("Search this value in source · clears report, category and date filters").accessibilityLabel("Search \(field.id) value in source").disabled(m.busy)}};Text(field.value.isEmpty ? "[Empty in source]":field.value).font(.system(size:12)).textSelection(.enabled);if ["phone number","address","partner","number","from_id","to_id"].contains(field.id.lowercased()) && !field.value.isEmpty {Button("Find matching phone number"){m.searchField(field.value,phone:true)}.font(.caption).disabled(m.busy)}}.frame(maxWidth:.infinity,alignment:.leading);Divider()}}};DisclosureGroup("Evidence provenance"){VStack(alignment:.leading,spacing:10){InvestigatorSourcesView(m:m,observations:r.observations);Divider();VStack(alignment:.leading,spacing:7){Text("SOURCE REFERENCE").font(.caption2).foregroundStyle(LawlietTheme.secondary);Text(r.sourceFile).font(.system(size:11,design:.monospaced)).textSelection(.enabled);DisclosureGroup("Recorded source SHA-256"){Text(r.sourceHash).font(.system(size:10,design:.monospaced)).textSelection(.enabled)};Text(r.sourceRef).font(.system(size:11,design:.monospaced)).textSelection(.enabled);Text(r.parser).font(.caption).foregroundStyle(LawlietTheme.secondary)}}};DisclosureGroup("Original fields & provenance"){Text(r.raw).font(.system(size:11,design:.monospaced)).textSelection(.enabled).frame(maxWidth:.infinity,alignment:.leading)};if r.category == "recovery" {Text("Recovery candidate: fragments can duplicate live records. Corroborate before concluding that a message was deleted.").font(.caption).foregroundStyle(LawlietTheme.secondary)} else if ["messages","attachments","media"].contains(r.category) {Text("Attachment references alone do not establish that attachment bytes were acquired.").font(.caption).foregroundStyle(LawlietTheme.secondary)}}.padding(14).frame(maxWidth:.infinity,alignment:.leading)}else{Text("Select a record").foregroundStyle(LawlietTheme.secondary).padding(24)}}.frame(minWidth:270,idealWidth:330,maxWidth:480)}
             }.padding(.top,8)
         }

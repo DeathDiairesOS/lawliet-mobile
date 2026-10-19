@@ -18,8 +18,9 @@ from .parsers import native_analyze, timestamp
 from .tools import devices, doctor, collect
 from .acquisition import collect_android
 from .messages import import_chat
+from .discord_package import import_discord_package
 from .media import preview
-from .signal_backup import decrypt_signal
+from .signal_backup import decrypt_signal, signal_backup_preflight
 from .android_backup import import_backup
 from .private_apps import collect_private_apps
 from .validation import preflight, validate_case
@@ -174,6 +175,14 @@ def handle(workspace, request):
         create_case(workspace, request['id'], request.get('name'), request.get('examiner'))
         return {'id': request['id']}
     with connect(workspace, request['case']) as (root, db):
+        if action in {'agent-collection-create', 'agent-collection-list', 'agent-collection-status'}:
+            from .agent_collection import create_plan, list_plans, get_plan
+            from .agent_collection_handoff import present
+            if action == 'agent-collection-list':
+                return list_plans(root, db)
+            plan = (create_plan(root, db, request.get('config', {})) if action == 'agent-collection-create'
+                    else get_plan(root, db, request.get('plan_id')))
+            return present(plan, workspace)
         if action == 'file-inventory':
             from .file_inventory import inventory
             return inventory(db,request.get('query',''),request.get('evidence'),request.get('offset',0),request.get('limit',100))
@@ -183,6 +192,11 @@ def handle(workspace, request):
         if action == 'investigation-from-findings':
             from .report_preparation import from_findings
             return from_findings(root, db, request.get('objective'), request.get('finding_ids'))
+        if action == 'investigation-from-examination':
+            from .examination_report import prepare
+            return prepare(root, db, request.get('objective'), request.get('evidence_ids'),
+                           request.get('outcome'), request.get('examiner'), request.get('examination_scope'),
+                           request.get('limitations'), request.get('queries', []))
         if action == 'evidence-inspect':
             from .evidence_viewer import inspect_file
             return inspect_file(root, db, request.get('file_id'), request.get('offset', 0), request.get('length', 4096), request.get('encoding', 'utf-8'), request.get('format'))
@@ -228,6 +242,30 @@ def handle(workspace, request):
         if action == 'device-state-list':
             from .device_state import list_records
             return list_records(db, request.get('after', 0), request.get('limit', 100))
+        if action == 'customer-report-review':
+            from .report_review import review_bundle
+            return review_bundle(root, db, request.get('bundle_id'), request.get('kind'), request.get('expected_manifest_sha256'))
+        if action in {'customer-report-approve', 'customer-report-release', 'customer-report-redacted-draft',
+                      'customer-report-redacted-approve', 'customer-report-redacted-release'} and 'expected_manifest_sha256' in request:
+            from .report_review import checked_binding
+            redacted = action in {'customer-report-redacted-approve', 'customer-report-redacted-release'}
+            checked_binding(root, db, request.get('derivative_id' if redacted else 'draft_id'),
+                            'redacted' if redacted else 'original', request['expected_manifest_sha256'])
+        if action == 'mvt-preview':
+            from .mvt_review import inspect_bundle
+            return inspect_bundle(request.get('path'))
+        if action == 'mvt-import':
+            from .mvt_review import import_bundle
+            return import_bundle(root, db, request.get('path'), request.get('expected_manifest_sha256'), request.get('expected_upstream_case_id'))
+        if action == 'mvt-list':
+            from .mvt_review import list_bundles
+            return list_bundles(root, db)
+        if action == 'mvt-review':
+            from .mvt_review import review
+            return review(root, db, request.get('evidence'), request.get('query', ''), request.get('offset', 0), request.get('limit', 50))
+        if action == 'mvt-record':
+            from .mvt_review import record
+            return record(root, db, request.get('evidence'), request.get('artifact_id'))
         if action == 'customer-report-draft':
             from .investigation_report import build_customer_draft
             return build_customer_draft(root,db,request['investigation_id'],request.get('redactions'))
@@ -257,6 +295,9 @@ def handle(workspace, request):
             return case_coverage(root,db,ledger_options={
                 'offset':request.get('offset',0),'limit':request.get('limit',100),
                 'filters':request.get('filters')})['ledger']
+        if action == 'scenario-assessment':
+            from .scenario_assessment import assess
+            return assess(root, db, request.get('evidence'), request.get('scenario', 'messages'), request.get('run'))
         if action == 'coverage-record':
             from .coverage_ledger import record_observation
             return record_observation(db,request.get('observation'))
@@ -280,14 +321,14 @@ def handle(workspace, request):
             for e in evidence:
                 runs = list(db.execute("SELECT * FROM runs WHERE evidence_id=? ORDER BY started_at DESC,rowid DESC", (e['id'],)))
                 for run in runs:
-                    if run['status'] != 'complete' and not (run['engine']=='mulder' and run['status']=='partial'):
+                    if run['status'] != 'complete' and not (run['status']=='partial' and (run['engine']=='mulder' or has_run_index(db,run['id']))):
                         continue
                     if run['engine'] not in {'ileapp','aleapp','sqlite-dissect'} and not has_run_index(db,run['id']):continue
                     clause, args = run_scope(db, run['id'])
                     count = db.execute('SELECT COUNT(*) FROM artifacts WHERE '+clause, args).fetchone()[0]
                     normalized_parsers = [r[0] for r in db.execute('SELECT DISTINCT parser FROM artifacts WHERE '+clause+' LIMIT 2', args)]
                     parser_filter = normalized_parsers[0] if len(normalized_parsers)==1 else ''
-                    sources.append({'id': run['id'], 'evidence': e['id'], 'parser': parser_filter, 'run': run['id'], 'label': e['label'] + ' · ' + run['engine'] + ' · ' + run['id'], 'records': count})
+                    sources.append({'id': run['id'], 'evidence': e['id'], 'parser': parser_filter, 'run': run['id'], 'label': e['label'] + ' · ' + run['engine'] + (' · partial' if run['status']=='partial' else '') + ' · ' + run['id'], 'records': count, 'status':run['status']})
                 for row in db.execute("SELECT parser,COUNT(*) AS n FROM artifacts WHERE evidence_id=? AND parser NOT IN ('ileapp','aleapp','sqlite-dissect') GROUP BY parser", (e['id'],)):
                     sources.append({'id': e['id']+':'+row['parser'], 'evidence': e['id'], 'parser': row['parser'], 'label': e['label']+' · '+row['parser'], 'records': row['n']})
             for e in evidence:
@@ -314,10 +355,22 @@ def handle(workspace, request):
             if engine not in {'native','ileapp','aleapp','exiftool'}: raise UserError('Unknown engine.')
             return adapter_analyze(root,db,workspace,request['evidence'],engine)
         if action == 'import-chat':
-            return import_chat(root,db,request['path'],request['date_order'],request.get('timezone') or None,year_century=request.get('year_century'))
+            return import_chat(root,db,request['path'],request['date_order'],request.get('timezone') or None,year_century=request.get('year_century'),chat_path=request.get('chat_path') or None,reuse=True)
+        if action == 'import-discord':
+            return import_discord_package(root,db,request['path'],timezone_name=request.get('timezone') or None)
+        if action == 'signal-preflight':
+            try:
+                result=signal_backup_preflight(request['path'],workspace)
+                result['ready']=result.get('tool',{}).get('available',False)
+                return result
+            except UserError as exc:
+                return {'ready':False,'format_verified':False,'reason':str(exc)}
         if action == 'decrypt-signal':
             result=decrypt_signal(root,db,workspace,request['path'],request['passphrase'])
+            result['decode_status']=result['status']
             result['analysis']=native_analyze(root,db,result['evidence_id'])
+            if result['analysis'].get('status')!='complete':result['status']='partial'
+            result['message_records']=db.execute("SELECT COUNT(*) FROM artifacts WHERE evidence_id=? AND category='messages' AND json_extract(data,'$.message.app')='signal'",(result['evidence_id'],)).fetchone()[0]
             return result
         if action == 'sqlite-files':
             rows=[]
@@ -333,6 +386,13 @@ def handle(workspace, request):
             artifact=db.execute('SELECT * FROM artifacts WHERE id=?',(request['artifact_id'],)).fetchone()
             if not artifact or artifact['category']!='messages': return []
             data=json.loads(artifact['data'])
+            if artifact['parser'].startswith('whatsapp-export/'):
+                attachment=data.get('attachment',{})
+                if attachment.get('status')!='available' or type(attachment.get('file_id')) is not int:return []
+                linked=[]
+                for row in db.execute("SELECT a.*, f.sha256 AS source_sha256, f.logical_path FROM artifacts a JOIN files f ON f.id=a.file_id WHERE a.evidence_id=? AND a.file_id=? AND a.category='media' AND a.parser='native/whatsapp-export/3' LIMIT 100",(artifact['evidence_id'],attachment['file_id'])):
+                    record=dict(row);record['data']=json.loads(record['data']);linked.append(record)
+                return linked
             if artifact['parser'].startswith('native/'):
                 row_id=data.get('__rowid__');file_id=artifact['file_id']
             elif artifact['parser']=='ileapp':
@@ -352,7 +412,7 @@ def handle(workspace, request):
             return assess_android(root,db,workspace,request['serial'])
         if action == 'preflight':
             budget=int(request.get('max_gib',20))*1024**3
-            if request['platform']=='android' and request.get('profile')=='contacts-provider':budget=min(budget,64*1024**2)
+            if request['platform']=='android' and request.get('profile') in {'contacts-provider','sms-provider'}:budget=min(budget,64*1024**2)
             return preflight(workspace,request['platform'],budget)
         if action == 'app-coverage':
             return app_coverage(db,request['evidence'],request.get('run'))
@@ -362,16 +422,23 @@ def handle(workspace, request):
             return validate_case(root,db,workspace,request['evidence'],request.get('parser'),request.get('run'))
         if action == 'collect':
             platform=request['platform'];budget=int(request.get('max_gib',20))*1024**3
-            if platform=='android' and request.get('profile')=='contacts-provider':budget=min(budget,64*1024**2)
+            if platform=='android' and request.get('profile') in {'contacts-provider','sms-provider'}:budget=min(budget,64*1024**2)
             readiness=preflight(workspace,platform,budget)
             if not readiness['ready']: raise UserError('Acquisition preflight failed: reserve twice the collection budget plus 1 GiB, and configure required tools. Choose another workspace or adjust the budget deliberately.')
             if platform=='android' and request.get('profile')=='private-apps':
                 result=collect_private_apps(root,db,workspace,request['serial'],3600,budget)
             elif platform=='android':
-                result=collect_android(root,db,workspace,request['serial'],request.get('profile','messages'),request.get('pulls',[]),3600,budget)
+                result=collect_android(root,db,workspace,request['serial'],request.get('profile','messages'),request.get('pulls',[]),3600,budget,
+                                       request.get('max_sms',1000),request.get('android_user'),request.get('sms_prefix'))
             elif platform=='ios': result=collect(root,db,workspace,platform,request['serial'],3600,budget)
             else: raise UserError('Choose Android or iOS.')
-            if result.get('evidence_id'): result['analysis']=native_analyze(root,db,result['evidence_id'])
+            result['collection_status']=result['status']
+            # Only the Android SMS provider indexes its own result. A stale
+            # Android dialog selection must not suppress iPhone parsing.
+            if result.get('evidence_id') and not (platform=='android' and request.get('profile')=='sms-provider'):
+                result['analysis']=native_analyze(root,db,result['evidence_id'])
+                if result['analysis'].get('status')!='complete' and result['status']=='complete':
+                    result['status']='partial'
             return result
         if action == 'record-media-trash-source':
             from .media_sources import record_trash
@@ -420,7 +487,9 @@ def handle(workspace, request):
                     'reports': report_inventory(db,request,clause,args),
                     'first':dates[0],'last':dates[1],'undated':dates[2] or 0,'total':dates[3]}
         if action == 'records':
-            offset = max(0, int(request.get('offset', 0)))
+            offset = request.get('offset', 0)
+            if type(offset) is not int or not 0 <= offset <= 2**63-1:
+                raise UserError('Record offset must be a nonnegative SQLite-range integer; booleans, strings and fractions are not accepted.')
             if request.get('presentation')=='investigator':
                 from .investigator_view import investigator_records
                 result=investigator_records(db,filters(request),offset,100,request.get('contact_basis','auto'))

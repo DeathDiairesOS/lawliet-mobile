@@ -40,10 +40,11 @@ enum CaseCatalog {
 }
 
 struct ReportHistoryItem:Identifiable {
-    let id:String;let path:String;let entries:Int;let sources:Int;let investigation:String;let available:Bool;let error:String;let modified:Date?
+    let id:String;let path:String;let entries:Int;let sources:Int;let investigation:String;let available:Bool;let error:String;let modified:Date?;let kind:String
     init(_ r:[String:Any]) {
         id=r["id"] as? String ?? "";path=r["path"] as? String ?? "";entries=r["entries"] as? Int ?? 0;sources=r["sources"] as? Int ?? 0
         investigation=r["investigation_id"] as? String ?? "";available=r["available"] as? Bool ?? false;error=r["error"] as? String ?? ""
+        kind=r["kind"] as? String ?? "original"
         modified=(r["modified"] as? Double).map{Date(timeIntervalSince1970:$0)}
     }
 }

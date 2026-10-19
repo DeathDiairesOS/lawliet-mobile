@@ -10,6 +10,7 @@ struct CoverageReviewView:View {
     @State private var loading=false
     @State private var error=""
     @State private var requestID=UUID()
+    @State private var showingScenarioAssessment=false
     private var filters:[String:String] {
         var result:[String:String]=[:]
         if !axis.isEmpty {result["axis"]=axis}
@@ -17,7 +18,7 @@ struct CoverageReviewView:View {
         if !evidence.isEmpty {result["evidence_id"]=evidence}
         return result
     }
-    private let states=["requested","collected","excluded","inaccessible","collection-unresolved","decryption-succeeded","decryption-failed","parsed","unsupported","parser-failed","unresolved","reviewed","verified","searched-with-no-finding"]
+    private let states=["requested","collected","excluded","inaccessible","collection-unresolved","decryption-succeeded","decryption-failed","parsed","parsed-empty","unsupported","parser-failed","unresolved","reviewed","verified","searched-with-no-finding"]
     private var selected:CoverageObservation? {page?.entries.first{$0.id==selection}}
     private func load(_ offset:Int=0) {
         let identifier=UUID();requestID=identifier
@@ -44,7 +45,8 @@ struct CoverageReviewView:View {
                     Text("Coverage & review").font(.system(size:18,weight:.semibold))
                     Text(m.caseName).font(.system(size:11)).foregroundStyle(LawlietTheme.secondary)
                 }
-                Spacer();Button("Refresh"){load()}.disabled(loading || m.busy)
+                Spacer();Button("Assess customer question…"){showingScenarioAssessment=true}.disabled(m.caseID.isEmpty || m.busy)
+                Button("Refresh"){load()}.disabled(loading || m.busy)
             }
             Text("Collection, parsing and examiner decisions are independent. Counts describe recorded observations; they do not measure phone completeness.").font(.caption).foregroundStyle(LawlietTheme.secondary)
             if let page=page {
@@ -105,5 +107,6 @@ struct CoverageReviewView:View {
         }.font(.system(size:12)).controlSize(.small).padding(16)
         .task {load()}
         .onChange(of:filters){_ in load()}
+        .sheet(isPresented:$showingScenarioAssessment){ScenarioAssessmentView(m:m,initialEvidence:evidence)}
     }
 }

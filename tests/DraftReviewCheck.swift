@@ -13,6 +13,22 @@ import Foundation
             precondition(draft.citations[0].timestamp=="Undated / timezone unknown")
             precondition(draft.report.contains("UTC unknown"))
             precondition(!draft.report.contains("EXCLUDED_CANARY"))
+        } else if mode=="examination-no-matches" || mode=="examination-inconclusive" {
+            let draft=try DraftReview.load(folder,expectedCase:"A")
+            precondition(draft.entries.isEmpty && draft.citations.isEmpty)
+            guard let examination=draft.examination else {fatalError("Missing examination")}
+            precondition(examination.outcome == (mode=="examination-no-matches" ? "no_matches":"inconclusive"))
+            precondition(examination.examiner=="Synthetic examiner")
+            precondition(examination.scope=="Selected supplied text index only")
+            precondition(examination.limitations.contains("not a complete phone extraction"))
+            if examination.outcome=="no_matches" {precondition(examination.queries.count==1 && examination.queries[0].returnedRecords==0)}
+            precondition(!draft.report.contains("EXCLUDED_CANARY"))
+        } else if mode=="redacted" {
+            let draft=try DraftReview.load(folder,expectedCase:"A")
+            precondition(draft.kind=="redacted" && draft.entries.count==1 && draft.citations.count==1)
+            precondition(!draft.report.contains("PERSON_CANARY"))
+            precondition(draft.citations[0].source("recorded_source_sha256").count==64)
+            precondition(draft.limitations.contains(where:{$0.contains("case-sensitive")}))
         } else {
             do {
                 _ = try DraftReview.load(folder,expectedCase:mode=="wrong-case" ? "B":"A")

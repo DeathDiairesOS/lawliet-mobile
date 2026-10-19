@@ -51,6 +51,13 @@ extension AppModel {
 struct ReviewContextView: View {
     @ObservedObject var m: AppModel
     private var applied: ReviewContext { m.displayedReview ?? ReviewContext([:]) }
+    private var adverseHistory: String {
+        let states=[("partial","partial"),("failed","failed"),("interrupted","interrupted"),("cancelled","cancelled"),("needs review","needing review")]
+        return states.compactMap { state,label in
+            let count=m.runItems.filter{$0.status.trimmingCharacters(in:.whitespacesAndNewlines).lowercased()==state}.count
+            return count>0 ? "\(count) \(label)":nil
+        }.joined(separator:", ")
+    }
     private func label(_ filter: ReviewFilter) -> String {
         if filter.id=="conversation", let id=applied.values["conversation"], let thread=m.threads.first(where:{$0.id==id}) {
             return "Conversation: \(thread.label)"
@@ -66,6 +73,16 @@ struct ReviewContextView: View {
                     Button(m.source?.isCaseWide==true ? "Search entire case":"Search entire source"){m.searchEntireSource()}.disabled(m.busy)
                 }
             }
+            if !adverseHistory.isEmpty {
+                HStack(alignment:.top,spacing:8) {
+                    Image(systemName:"exclamationmark.triangle").foregroundStyle(.orange)
+                    Text("Case analysis history: \(adverseHistory). Results and source exports cover indexed records; zero matches do not establish absence of evidence.")
+                        .font(.caption).foregroundStyle(LawlietTheme.secondary).fixedSize(horizontal:false,vertical:true)
+                    Spacer(minLength:0)
+                    Button("Processing history"){m.mode="Sources"}.disabled(m.busy)
+                    Button("Coverage & review"){m.mode="Coverage"}.disabled(m.busy)
+                }
+            }
             if !applied.activeFilters.isEmpty {
                 ScrollView(.horizontal) {
                     HStack(spacing:6) {
@@ -75,6 +92,13 @@ struct ReviewContextView: View {
                         }
                     }
                 }
+            }
+            if !m.reviewError.isEmpty && !m.busy {
+                VStack(alignment:.leading,spacing:3) {
+                    Text("Review request failed").font(.caption).fontWeight(.semibold)
+                    Text(m.displayedReview == nil ? "No completed result is available. Retry the search.":"Showing the last completed results. Retry the search or page request.").font(.caption)
+                    Text(m.reviewError).font(.caption).textSelection(.enabled)
+                }.foregroundStyle(.orange).fixedSize(horizontal:false,vertical:true)
             }
             if m.reviewNeedsApply && !m.busy {
                 HStack {

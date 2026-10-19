@@ -48,7 +48,7 @@ class ProviderContactTests(unittest.TestCase):
                 output.write_text(text);error=Path(str(output)+'.stderr');error.write_text('')
                 return dict(argv=argv,returncode=0,stdout=str(output),stderr=str(error))
             with connect(ws,'qa') as (root,db),patch('lawliet_mobile.provider_contacts.command',return_value=['adb']),patch('lawliet_mobile.provider_contacts.execute',side_effect=fake):
-                result=collect_contacts(root,db,ws,'SERIAL')
+                result=collect_contacts(root,db,ws,'SERIAL',user=10)
                 self.assertEqual(result['status'],'failed' if denied else 'partial' if changed else 'complete')
                 self.assertTrue(result['evidence_id']);self.assertTrue(verify(root,db)['ok'])
                 native_analyze(root,db,result['evidence_id'])

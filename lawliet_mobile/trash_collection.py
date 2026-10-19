@@ -24,8 +24,8 @@ def collect_trash(root, db, workspace, serial, timeout=900, max_bytes=1024**3):
         raise UserError('Use a positive collection byte budget.')
     argv = command(workspace, 'adb') + ['-s', serial]
     identifier = uuid.uuid4().hex[:12]
-    folder = root / 'collections' / identifier
-    folder.mkdir(parents=True)
+    from .provider_contacts import _create_collection
+    folder = _create_collection(root, identifier)
     started = now()
     commands, coverage, errors, matches = [], [], [], []
     status, eid = 'failed', None
@@ -107,6 +107,7 @@ def collect_trash(root, db, workspace, serial, timeout=900, max_bytes=1024**3):
                     'collected_at_host_utc': now()}) + '\n', encoding='utf-8')
                 matches.append((output.relative_to(folder).as_posix(), receipt.relative_to(folder).as_posix()))
                 coverage.append({'source': remote, 'state': 'collected', 'sha256': acquired,
+                                 'files': 1, 'bytes': output.stat().st_size,
                                  'detail': 'Accessible Trash copy; not permanent-deletion carving.'})
             except (UserError, OSError, UnicodeError) as exc:
                 errors.append({'source': remote, 'error': str(exc)})

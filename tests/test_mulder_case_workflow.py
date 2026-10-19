@@ -3,7 +3,10 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 from lawliet_mobile.core import create_case,connect,import_evidence
+from lawliet_mobile.mulder_ownership import bind_review_case
 try:
+    from mulder.audit import AuditLog
+    from mulder.db import CaseDB
     from mulder.server.tools.phone import _parse_tsv_file,list_ancalor_files,import_ancalor_leapp_review
 except ModuleNotFoundError as error:
     if error.name != "mulder":
@@ -17,7 +20,10 @@ class MulderWorkflowTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.base=Path(self.tmp.name).resolve();self.ws=self.base/'lawliet-review';create_case(self.ws,'qa');self.case=self.ws/'qa'
-        self.ctx=SimpleNamespace(db=SimpleNamespace(db_path=self.base/'active.db'))
+        evidence=self.base/'evidence';evidence.mkdir()
+        parent=CaseDB.create('active',str(evidence),self.base);self.addCleanup(parent.close)
+        bind_review_case(self.case,parent.db_path)
+        self.ctx=SimpleNamespace(case_id='active',db=parent,audit=AuditLog(self.base/'active-audit.jsonl'))
     def test_large_field_exact_unicode_and_ceiling(self):
         path=self.base/'large.tsv';body='Unicode 😀\nquoted " value\t'+('x'*180000)
         with path.open('w',newline='') as out:csv.writer(out,delimiter='\t').writerows([['ID','Value'],['1',body]])
@@ -27,7 +33,7 @@ class MulderWorkflowTests(unittest.TestCase):
     def test_inventory_hash_ids_pagination_and_literal_query(self):
         source=self.base/'com.example.trade.apk';source.write_bytes(b'not executable fixture')
         with connect(self.ws,'qa') as (root,db):import_evidence(root,db,source,'android')
-        with patch('mulder.server.tools.phone.get_ctx',return_value=self.ctx):
+        with patch('mulder.server.app._ctx',self.ctx):
             r=list_ancalor_files(str(self.case),'TRADE',0,1)
             self.assertEqual(r['total'],1);self.assertEqual(r['files'][0]['size'],22)
             self.assertEqual(len(r['files'][0]['sha256']),64)
@@ -38,7 +44,9 @@ class MulderWorkflowTests(unittest.TestCase):
     def test_retained_report_import_same_case_and_external_refusal(self):
         report=self.base/'retained-tools'/'run'/'report';report.mkdir(parents=True)
         (report/'Messages.tsv').write_text('Timestamp\tBody\n2023-09-20T20:09:49Z\tSynthetic report\n')
-        with patch('mulder.server.tools.phone.get_ctx',return_value=self.ctx):
+        with patch('mulder.server.app._ctx',self.ctx):
+            from mulder.server.case_scope import register_retained_root
+            register_retained_root(report.parent)
             result=import_ancalor_leapp_review(str(self.case),str(report))
             self.assertTrue(result['integrity']['ok']);self.assertEqual(result['case_path'],str(self.case))
             with self.assertRaises(ValueError):import_ancalor_leapp_review(str(self.case),str(self.base))

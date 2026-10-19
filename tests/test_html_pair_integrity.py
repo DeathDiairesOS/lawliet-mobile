@@ -1,5 +1,6 @@
 """HTML/coverage pair refusal, failure cleanup and scope regression checks."""
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,6 +8,7 @@ from unittest.mock import patch
 
 from lawliet_mobile.app_backend import handle
 from lawliet_mobile.core import UserError, audit, connect, create_case, digest
+from lawliet_mobile.anchored_output import OutputFiles
 from lawliet_mobile.report import write_report
 
 
@@ -103,7 +105,7 @@ class HtmlPairIntegrityTests(unittest.TestCase):
             self.assertEqual(digest(companion_source), companion_hash)
 
     def test_partial_output_and_companion_write_failures_clean_owned_files(self):
-        original_open = Path.open
+        original_open = OutputFiles.open
         class PartialWriter:
             def __init__(self, stream): self.stream = stream
             def __enter__(self): return self
@@ -117,31 +119,32 @@ class HtmlPairIntegrityTests(unittest.TestCase):
                 path = self.base / (which + '.html')
                 companion = Path(str(path) + '.coverage.json')
                 target = path if which == 'output' else companion
-                def opening(item, *args, **kwargs):
-                    stream = original_open(item, *args, **kwargs)
-                    return PartialWriter(stream) if item == target and args[0] == 'x' else stream
-                with patch.object(Path, 'open', opening), self.assertRaises(OSError):
+                def opening(outputs, item):
+                    stream = original_open(outputs, item)
+                    return PartialWriter(stream) if item == target else stream
+                with patch.object(OutputFiles, 'open', opening), self.assertRaises(OSError):
                     write_report(root, db, path)
                 self.assertFalse(path.exists())
                 self.assertFalse(companion.exists())
                 self.assertEqual(db.execute('SELECT COUNT(*) FROM audit').fetchone()[0], before)
 
     def test_racing_exclusive_create_preserves_unowned_file(self):
-        original_open = Path.open
+        original_link = os.link
         with connect(self.workspace, 'A') as (root, db):
             for which in ('output', 'companion'):
                 path = self.base / (which + '.html')
                 companion = Path(str(path) + '.coverage.json')
                 target = path if which == 'output' else companion
-                def opening(item, *args, **kwargs):
-                    if item == target and args[0] == 'x':
-                        with original_open(item, 'w') as stream:
-                            stream.write('OTHER WRITER')
-                    return original_open(item, *args, **kwargs)
-                with patch.object(Path, 'open', opening), self.assertRaises(FileExistsError):
+                def linking(source, destination, **kwargs):
+                    if destination == target.name:
+                        # Race after the initial existence check, before exclusive publication.
+                        target.write_text('OTHER WRITER')
+                    return original_link(source, destination, **kwargs)
+                with patch('lawliet_mobile.anchored_output.os.link', linking), self.assertRaises(FileExistsError):
                     write_report(root, db, path)
                 self.assertEqual(target.read_text(), 'OTHER WRITER')
                 self.assertFalse((companion if which == 'output' else path).exists())
+                self.assertEqual(list(self.base.glob('.lawliet-export-*')), [])
 
     def test_audit_failure_rolls_back_only_export_savepoint(self):
         def fail(db, action, detail):
@@ -159,14 +162,14 @@ class HtmlPairIntegrityTests(unittest.TestCase):
             self.assertEqual(db.execute("SELECT COUNT(*) FROM audit WHERE action='test.pending'").fetchone()[0], 1)
 
     def test_companion_hash_failure_cleans_pair(self):
-        original_digest = digest
-        def fail(path):
+        original_digest = OutputFiles.digest
+        def fail(outputs, path):
             if str(path).endswith('.html.coverage.json'):
                 raise OSError('injected hash failure')
-            return original_digest(path)
+            return original_digest(outputs, path)
         with connect(self.workspace, 'A') as (root, db):
             path = self.base / 'hash.html'
-            with patch('lawliet_mobile.core.digest', side_effect=fail), self.assertRaises(OSError):
+            with patch.object(OutputFiles, 'digest', fail), self.assertRaises(OSError):
                 write_report(root, db, path)
             self.assertFalse(path.exists())
             self.assertFalse(Path(str(path) + '.coverage.json').exists())

@@ -7,12 +7,17 @@ class BoundsTests(unittest.TestCase):
  @classmethod
  def setUpClass(cls):
   try:
+   from mulder.audit import AuditLog
+   from mulder.db import CaseDB
+   from mulder.server import app
    from mulder.server.tools import phone
   except ModuleNotFoundError as error:
    if error.name != 'mulder': raise
    raise unittest.SkipTest('Requires the patched Mulder integration runtime')
   from lawliet_mobile.core import create_case,connect
+  from lawliet_mobile.mulder_ownership import bind_review_case
   cls.temp=tempfile.TemporaryDirectory();cls.base=Path(cls.temp.name).resolve();ws=cls.base/'lawliet-review';create_case(ws,'BOUNDS')
+  cls.addClassCleanup(cls.temp.cleanup)
   with connect(ws,'BOUNDS') as (root,db):
    cls.root=root
    db.execute("INSERT INTO evidence(id,label) VALUES('e','fixture')")
@@ -23,11 +28,12 @@ class BoundsTests(unittest.TestCase):
     db.execute('INSERT INTO artifacts VALUES(?,?,?,?,?,?,?,?,?,?,?)',(str(i),'e',1,'messages',stamp,str(i),'title','literal 東京 %_',f'sms:{i}','synthetic/1',json.dumps(data)))
    db.commit()
   cls.mod=phone
-  cls.fn=staticmethod(inspect.unwrap(cls.mod.query_ancalor_review));cls.ctx=patch.object(cls.mod,'get_ctx',return_value=SimpleNamespace(db=SimpleNamespace(db_path=cls.base/'case.db')));cls.ctx.start();cls.before=hashlib.sha256((cls.root/'case.sqlite').read_bytes()).hexdigest()
+  parent=CaseDB.create('case',str(cls.base),cls.base);cls.addClassCleanup(parent.close)
+  bind_review_case(cls.root,parent.db_path)
+  cls.fn=staticmethod(inspect.unwrap(cls.mod.query_ancalor_review));cls.ctx=patch.object(app,'_ctx',SimpleNamespace(case_id='case',db=parent,audit=AuditLog(cls.base/'case-audit.jsonl')));cls.ctx.start();cls.addClassCleanup(cls.ctx.stop);cls.before=hashlib.sha256((cls.root/'case.sqlite').read_bytes()).hexdigest()
  @classmethod
  def tearDownClass(cls):
   assert hashlib.sha256((cls.root/'case.sqlite').read_bytes()).hexdigest()==cls.before
-  cls.ctx.stop();cls.temp.cleanup()
  def query(self,**kw):return self.fn(str(self.root),**kw)
  def ids(self,r):return [x['id'] for x in r['records']]
  def test_seconds_and_six_fraction_inclusive(self):

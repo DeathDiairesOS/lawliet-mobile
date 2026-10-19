@@ -70,15 +70,16 @@ struct ReportHistoryView:View {
         VStack(alignment:.leading,spacing:12) {
             HStack{Text("Report history").font(.system(size:18,weight:.semibold));Spacer();Button("Refresh"){reload()}.disabled(loading);Button("Open draft folder…"){m.draftPath="";m.dialog = .draftReview};Button("Close"){dismiss()}.keyboardShortcut(.cancelAction)}
             Text("\(m.caseName) · \(m.caseID)").font(.caption).foregroundStyle(LawlietTheme.secondary)
-            Text("Internal drafts remain unreviewed and unredacted. Opening a draft checks its bundle; listing it does not verify evidence or approve release.").foregroundStyle(LawlietTheme.secondary)
+            Text("Original drafts and selected-literal derivatives. Open a bundle to inspect it; Review & export rechecks sources and recorded approval. Listing alone does not verify or authorize release.").foregroundStyle(LawlietTheme.secondary)
+            HStack {Button("From saved findings…"){m.dialog = .draftPreparation}.disabled(m.busy || m.findingTotal==0);Button("Scoped examination…"){m.dialog = .examinationPreparation}.disabled(m.busy || m.evidenceItems.isEmpty)}
             if loading {ProgressView("Loading case drafts…").frame(maxWidth:.infinity,maxHeight:.infinity)}
             else if !error.isEmpty {Text(error).foregroundStyle(.orange).textSelection(.enabled).frame(maxWidth:.infinity,maxHeight:.infinity,alignment:.topLeading)}
-            else if items.isEmpty {VStack(spacing:10){Text("No saved drafts").font(.headline);Text("Prepare a draft from Saved findings. It will appear here without choosing a folder.").foregroundStyle(LawlietTheme.secondary)}.frame(maxWidth:.infinity,maxHeight:.infinity)}
+            else if items.isEmpty {VStack(spacing:10){Text("No saved drafts").font(.headline);Text("Prepare a draft from saved findings or record a scoped examination.").foregroundStyle(LawlietTheme.secondary)}.frame(maxWidth:.infinity,maxHeight:.infinity)}
             else {
                 Table(items,selection:$selection) {
-                    TableColumn("Draft") {r in VStack(alignment:.leading,spacing:3){Text(r.id).font(.system(size:11,design:.monospaced));Text(r.available ? "Unreviewed draft":"Unavailable").font(.caption).foregroundStyle(r.available ? Color.secondary:Color.orange)}}.width(min:220,ideal:270)
+                    TableColumn("Bundle") {r in VStack(alignment:.leading,spacing:3){Text(r.id).font(.system(size:11,design:.monospaced));Text(r.available ? (r.kind=="redacted" ? "Selected-literal derivative":"Original draft"):"Unavailable").font(.caption).foregroundStyle(r.available ? Color.secondary:Color.orange)}}.width(min:220,ideal:270)
                     TableColumn("Entries"){Text($0.available ? String($0.entries):"—")}.width(55)
-                    TableColumn("Sources"){Text($0.available ? String($0.sources):"—")}.width(55)
+                    TableColumn("Cited records"){Text($0.available ? String($0.sources):"—").help("Distinct cited artifact records, not evidence files or unique real-world events.")}.width(90)
                     TableColumn("File modified"){r in Text(r.modified.map{$0.formatted(date:.abbreviated,time:.shortened)} ?? "Unavailable").font(.caption)}.width(min:140,ideal:180)
                 }.contextMenu(forSelectionType:String.self){ids in if let row=items.first(where:{ids.contains($0.id)}) {Button("Review draft"){open(row)}.disabled(!row.available)}} primaryAction:{ids in if let row=items.first(where:{ids.contains($0.id)}) {open(row)}}
                 if let row=selected {Text(row.error.isEmpty ? "Investigation: \(row.investigation)\n\(row.path)":row.error).font(.caption).foregroundStyle(LawlietTheme.secondary).textSelection(.enabled)}

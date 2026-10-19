@@ -52,6 +52,11 @@ def main():
         shutil.rmtree(backend)  # Generated bundle only; do not retain removed source modules.
     shutil.copytree(args.backend_source or root / 'lawliet_mobile', backend,
                     ignore=shutil.ignore_patterns('__pycache__', '*.pyc'))
+    # Retain the reviewed integration contract, not a second Mulder installation.
+    for relative in ('setup/mobile-macos-arm64.json', 'integrations/mulder/lawliet.patch'):
+        target = backend / '_mulder_contract' / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(root / relative, target)
     legacy_backend = resources / 'ancalor_mobile'
     if legacy_backend.is_symlink(): legacy_backend.unlink()
     elif legacy_backend.exists(): shutil.rmtree(legacy_backend)
@@ -67,10 +72,16 @@ def main():
     native_command = ['swiftc', '-parse-as-library', '-swift-version', '5', '-O', '-target', platform.machine()+'-apple-macos13.0',
                     str(root / 'desktop/LawlietMobile.swift'), str(root / 'desktop/BackendProcess.swift'), str(root / 'desktop/EngineInvestigationView.swift'), str(root / 'desktop/CaseManagementView.swift'), str(root / 'desktop/ReviewContext.swift'), str(root / 'desktop/ReviewContextView.swift'), str(root / 'desktop/CoverageReview.swift'), str(root / 'desktop/CoverageReviewView.swift'), '-o', str(contents / 'MacOS/LawlietMobile'),
                     '-framework', 'SwiftUI', '-framework', 'AppKit', '-framework', 'WebKit']
-    native_command[8:8] = [str(root/'desktop/DraftReview.swift'), str(root/'desktop/DraftReviewView.swift'),str(root/'desktop/DraftPreparationView.swift'),str(root/'desktop/SourceScope.swift'),str(root/'desktop/CaseCatalog.swift'),str(root/'desktop/CaseCatalogView.swift'),str(root/'desktop/InlineMediaCache.swift'),str(root/'desktop/InlineMediaView.swift')]
+    native_command[8:8] = [str(root/'desktop/DraftReview.swift'), str(root/'desktop/DraftReviewView.swift'),str(root/'desktop/DraftPreparationView.swift'),str(root/'desktop/ExaminationPreparationView.swift'),str(root/'desktop/SourceScope.swift'),str(root/'desktop/CaseCatalog.swift'),str(root/'desktop/CaseCatalogView.swift'),str(root/'desktop/InlineMediaCache.swift'),str(root/'desktop/InlineMediaView.swift')]
     native_command[8:8] = [str(root/'desktop/DeviceAuditLog.swift'),str(root/'desktop/DeviceAuditLogView.swift'),str(root/'desktop/DeviceInteractionView.swift'),str(root/'desktop/ParsedReportsSidebar.swift'),str(root/'desktop/EvidenceFilesView.swift'),str(root/'desktop/UnifiedEvidenceSidebar.swift')]
     native_command[8:8] = [str(root/'desktop/InvestigatorSourcesView.swift'),str(root/'desktop/LawlietTheme.swift'),str(root/'desktop/CapabilityCoverageView.swift')]
     native_command[8:8] = [str(root/'desktop/IPhoneInteractionView.swift')]
+    native_command[8:8] = [str(root/'desktop/SQLiteResultReview.swift'),str(root/'desktop/SQLiteResultReviewView.swift')]
+    native_command[8:8] = [str(root/'desktop/ScenarioAssessmentView.swift')]
+    native_command[8:8] = [str(root/'desktop/CodexInvestigationHandoff.swift')]
+    native_command[8:8] = [str(root/'desktop/AgentCollectionView.swift')]
+    native_command[8:8] = [str(root/'desktop/ReportReviewBinding.swift'),str(root/'desktop/ReportReleaseView.swift'),str(root/'desktop/MVTReviewView.swift'),str(root/'desktop/MVTObservationSummary.swift')]
+    native_command[8:8] = [str(root/'desktop/ArtifactTable.swift')]
     sources = [Path(arg) for arg in native_command if arg.endswith('.swift')]
     identity = {'compiler': subprocess.check_output(['swiftc', '--version'], text=True),
                 'compiler_path': str(Path(shutil.which('swiftc')).resolve()),
@@ -96,7 +107,8 @@ def main():
     receipt = {'schema_version':1, 'native_key':key, 'native_sha256':digest(executable.read_bytes()),
                'compiler_sdk':identity,
                'catalog_helper_sha256':digest((resources/'catalog_backend.py').read_bytes()),
-               'backend_hashes':{str(path.relative_to(backend)):digest(path.read_bytes()) for path in sorted(backend.rglob('*.py'))}}
+               'backend_hashes':{str(path.relative_to(backend)):digest(path.read_bytes()) for path in sorted(backend.rglob('*.py'))},
+               'mulder_contract_hashes':{str(path.relative_to(backend)):digest(path.read_bytes()) for path in sorted((backend/'_mulder_contract').rglob('*')) if path.is_file()}}
     cache.write_text(json.dumps(receipt, indent=2)+'\n')
     print(app)
 

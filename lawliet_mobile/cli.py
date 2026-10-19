@@ -21,6 +21,7 @@ from .tools import TOOLS, collect, configure, devices, doctor
 from .acquisition import collect_android, case_coverage
 from .android_backup import import_backup
 from .messages import conversations, import_chat
+from .discord_package import import_discord_package
 from .workflows import SCENARIOS, workflow
 from .review import review
 from .validation import preflight, validate_case
@@ -133,6 +134,28 @@ Original evidence is copied and hashed.""", formatter_class=argparse.RawDescript
     show = case.add_parser("show", help="case summary, evidence inventory, and coverage")
     show.add_argument("id")
     engines = sub.add_parser('engine', help='external investigation engine (Mulder); independent of deterministic parsers')
+    agent = sub.add_parser('agent-collection', help='authorize a bounded collection for Mulder; automatically preserve, parse and index results')
+    agent_actions = agent.add_subparsers(dest='action', required=True)
+    agent_config = agent_actions.add_parser('configure', help='select an existing Mulder launcher; never downloads or starts it')
+    agent_config.add_argument('--mulder-launcher', required=True)
+    authorize = agent_actions.add_parser('authorize', help='record examiner approval for one exact device and collection scope; does not collect yet')
+    authorize.add_argument('--case', required=True)
+    authorize.add_argument('--objective', required=True)
+    authorize.add_argument('--serial', required=True)
+    from .agent_collection import PROFILES
+    authorize.add_argument('--profile', action='append', required=True, choices=PROFILES,
+                           help='triage collects diagnostics without backup; messages explicitly attempts legacy telephony backup and may require device confirmation')
+    authorize.add_argument('--pull', action='append', default=[], help='explicit shared-storage path for files profile')
+    authorize.add_argument('--android-user', type=nonnegative)
+    authorize.add_argument('--examiner', required=True)
+    authorize.add_argument('--authorize-collection', action='store_true', help='explicitly authorize only the selected device/profile reads and local processing')
+    authorize.add_argument('--max-records', type=positive, default=1000)
+    authorize.add_argument('--max-bytes', type=positive, default=64*1024**2, help='per-profile budget up to 20 GiB; SMS and contacts are capped at 64 MiB')
+    authorize.add_argument('--timeout', type=positive, default=60, help='per-command timeout seconds')
+    for name in ('list', 'status', 'run'):
+        command = agent_actions.add_parser(name, help='execute an already authorized plan locally' if name=='run' else 'read persistent collection state')
+        command.add_argument('--case', required=True)
+        if name != 'list': command.add_argument('plan_id')
     engine_actions = engines.add_subparsers(dest='action', required=True)
     for name in ('check', 'start', 'list', 'status', 'cancel', 'logs'):
         command = engine_actions.add_parser(name)
@@ -141,6 +164,12 @@ Original evidence is copied and hashed.""", formatter_class=argparse.RawDescript
             command.add_argument('--config', required=True, help='JSON configuration without credentials; see docs/MULDER.md')
         elif name in ('status', 'cancel', 'logs'):
             command.add_argument('job_id')
+    report_import = sub.add_parser('import-report', help='retain one JSONL/TSV derived report; optionally contain decoding with configured existing runtime')
+    report_import.add_argument('path')
+    report_import.add_argument('--case', required=True)
+    report_import.add_argument('--format', choices=('jsonl','tsv'), required=True)
+    report_import.add_argument('--label')
+    report_import.add_argument('--contained', action='store_true', help='require contained decoder;32MiB input,16MiB normalized output; no host fallback; no folders')
     import_output = engine_actions.add_parser('import-output', help='preserve and review existing Mulder outputs locally; no model or parser execution')
     import_output.add_argument('path', help='completed Mulder output directory')
     import_output.add_argument('--case', required=True, help='destination Lawliet case')
@@ -182,13 +211,22 @@ Original evidence is copied and hashed.""", formatter_class=argparse.RawDescript
         if name == "process":
             intake.add_argument("--engine", choices=["auto", "aleapp", "ileapp", "native"], default="auto")
             intake.add_argument("--timeout", type=positive, default=900)
-    chat = sub.add_parser("import-chat", help="import one WhatsApp UTF-8 text export with explicit date interpretation")
+    chat = sub.add_parser("import-chat", help="import a WhatsApp text, ZIP or folder export with explicit date interpretation")
     chat.add_argument("path")
     chat.add_argument("--case", required=True)
     chat.add_argument("--date-order", choices=["dmy", "mdy", "ymd"], required=True)
     chat.add_argument("--timezone", help="IANA timezone; omitted means messages remain undated")
     chat.add_argument("--year-century", type=int, help="Explicit century for two-digit export years, e.g. 2000; omitted keeps them undated")
     chat.add_argument("--label")
+    chat.add_argument("--chat-path", help="relative transcript path when a bundle contains several chats")
+    chat.add_argument("--reuse", action="store_true", help="reuse an intact identical export with the same date interpretation")
+    discord = sub.add_parser("import-discord", help="preserve and index a supplied Discord account data package ZIP or folder")
+    discord.add_argument("path")
+    discord.add_argument("--case", required=True)
+    discord.add_argument("--timezone", help="explicit IANA timezone for timestamps lacking an offset; omitted keeps those records undated")
+    discord.add_argument("--label")
+    discord.add_argument("--max-gib", type=positive, default=20)
+    discord.add_argument("--max-files", type=positive, default=100000)
     conv = sub.add_parser("conversations", help="list source-scoped normalized message conversations")
     conv.add_argument("--case", required=True)
     conv.add_argument("--app")
@@ -205,6 +243,12 @@ Original evidence is copied and hashed.""", formatter_class=argparse.RawDescript
     review_cmd.add_argument("--timeout", type=positive, default=900)
     coverage = sub.add_parser("coverage", help="show collected, missing and unparsed evidence coverage")
     coverage.add_argument("--case", required=True)
+    assessment = sub.add_parser('case-assess', help='assess a customer scenario against selected indexed evidence; no collection or analysis',
+                                description='Summarize indexed records, source references and recorded gaps for one customer scenario. Reads retained metadata only; does not collect, parse, verify evidence bytes or approve findings.')
+    assessment.add_argument('--case', required=True)
+    assessment.add_argument('--evidence', required=True, help='one explicit case-local evidence ID')
+    assessment.add_argument('--scenario', choices=tuple(SCENARIOS), default='messages')
+    assessment.add_argument('--run', help='restrict indexed records and processing context to this evidence run')
     apps = sub.add_parser("app-coverage", help="compare Android app-path indicators with indexed messages; not a completeness verdict")
     apps.add_argument("--case", required=True)
     plan = sub.add_parser('analysis-plan', help='inspect evidence and preview compatible analysis; never executes tools')
@@ -290,6 +334,26 @@ Original evidence is copied and hashed.""", formatter_class=argparse.RawDescript
     conf.add_argument("name", choices=list(TOOLS))
     conf.add_argument("path", help="executable or Python entry point (e.g. ileapp.py)")
     conf.add_argument("--python", help="isolated Python interpreter for a .py tool entry point")
+    isolated = tool.add_parser('isolate-exiftool', help='opt into the qualified existing local ExifTool container profile; no image pull')
+    isolated.add_argument('--image', required=True)
+    isolated.add_argument('--tool-root', required=True, help='existing ExifTool Perl package root')
+    isolated.add_argument('--socket', required=True, help='existing local Docker Unix socket')
+    isolated.add_argument('--docker', required=True, help='existing Docker CLI executable')
+    isolated_sql = tool.add_parser('isolate-sqlite', help='opt into the existing pinned Python SQLite container; no image pull or host fallback')
+    isolated_sql.add_argument('--image', required=True)
+    isolated_sql.add_argument('--socket', required=True, help='existing local Docker Unix socket')
+    isolated_sql.add_argument('--docker', required=True, help='existing Docker CLI executable')
+    isolated_native = tool.add_parser('isolate-native', help='opt into bounded native parsing in the existing Python container; no host fallback')
+    isolated_native.add_argument('--image', required=True)
+    isolated_native.add_argument('--socket', required=True, help='existing local Docker Unix socket')
+    isolated_native.add_argument('--docker', required=True, help='existing Docker CLI executable')
+    reports = tool.add_parser('isolate-reports', help='configure existing pinned stdlib runtime for explicit contained single-report imports; no pull')
+    reports.add_argument('--image', required=True)
+    reports.add_argument('--socket', required=True)
+    reports.add_argument('--docker', required=True)
+    binding = tool.add_parser('bind-mulder-review', help='explicitly bind an existing review case to one existing Mulder parent case')
+    binding.add_argument('--case', required=True)
+    binding.add_argument('--parent-case-db', required=True)
     assess = sub.add_parser("assess-android", help="log device/access observations without root installation or permission changes")
     assess.add_argument("--case", required=True)
     assess.add_argument("--serial", required=True)
@@ -307,7 +371,10 @@ Original evidence is copied and hashed.""", formatter_class=argparse.RawDescript
     acquire.add_argument("--case", required=True)
     acquire.add_argument("--serial", required=True, help="explicit Android serial or iOS UDID")
     acquire.add_argument("--timeout", type=positive, default=900)
-    acquire.add_argument("--profile", choices=["triage", "messages", "logical", "files", "private-apps", "contacts-provider", "trash-photos"], default="triage", help="Android collection scope; logical adds telephony backup to triage")
+    acquire.add_argument("--profile", choices=["triage", "messages", "logical", "files", "private-apps", "contacts-provider", "sms-provider", "trash-photos"], default="triage", help="Android collection scope; sms-provider reads permitted SMS observations without a collector app")
+    acquire.add_argument('--max-sms',type=positive,default=1000,help='SMS-provider record ceiling (1–20000); excessive ID sets are refused before field reads')
+    acquire.add_argument('--android-user',type=int,help='Explicit nonnegative Android user/profile for SMS or contacts provider; otherwise observes the current user')
+    acquire.add_argument('--sms-prefix',help='Optional literal body prefix selected by the SMS provider; no MMS/RCS completeness claim')
     acquire.add_argument("--pull", action="append", default=[], help="explicit Android shared-storage path (repeatable)")
     acquire.add_argument("--max-gib", type=positive, default=20)
     recover = sub.add_parser("recover", help="run a supported SQLite recovery engine on an imported database")
@@ -319,6 +386,8 @@ Original evidence is copied and hashed.""", formatter_class=argparse.RawDescript
     decrypt.add_argument("path")
     decrypt.add_argument("--case", required=True)
     decrypt.add_argument("--passphrase-file", help="read passphrase from a local file; otherwise prompt securely")
+    signal_check = sub.add_parser("check-signal", help="check a supplied backup format and configured decoder without keys or decryption")
+    signal_check.add_argument("path")
     media = sub.add_parser("media-preview", help="verify and create a local preview copy of an indexed media/attachment record")
     media.add_argument("id")
     media.add_argument("--case", required=True)
@@ -435,6 +504,21 @@ def dispatch(args):
     if args.command in {"doctor", "tools"}:
         if args.command == "tools" and args.action == "configure":
             emit(configure(workspace, args.name, args.path, args.python), json_mode)
+        elif args.command == 'tools' and args.action == 'isolate-exiftool':
+            from .tools import configure_exiftool_container
+            emit(configure_exiftool_container(workspace, args.image, args.tool_root, args.socket, args.docker), json_mode)
+        elif args.command == 'tools' and args.action == 'isolate-sqlite':
+            from .sqlite_container import configure as configure_sqlite_container
+            emit(configure_sqlite_container(workspace,args.image,args.socket,args.docker),json_mode)
+        elif args.command == 'tools' and args.action == 'isolate-native':
+            from .native_container import configure as configure_native_container
+            emit(configure_native_container(workspace,args.image,args.socket,args.docker),json_mode)
+        elif args.command == 'tools' and args.action == 'isolate-reports':
+            from .report_container import configure as configure_reports
+            emit(configure_reports(workspace,args.image,args.socket,args.docker),json_mode)
+        elif args.command == 'tools' and args.action == 'bind-mulder-review':
+            from .mulder_ownership import bind_review_case
+            emit(bind_review_case(case_dir(workspace,args.case),args.parent_case_db),json_mode)
         elif args.command == "tools" and args.action == "adapters":
             emit(adapter_catalog(workspace), True)
         else:
@@ -446,6 +530,11 @@ def dispatch(args):
                 table(["ENGINE / TOOL", "STATUS", "PURPOSE"], [["native", "READY", "Baseline mobile database parsing"]] + [[r["tool"], "FOUND" if r["available"] else "OPTIONAL / MISSING", r["purpose"]] for r in result["tools"]])
                 print("\nCore commands work offline. Tool presence does not establish device compatibility.")
         return 0
+    if args.command == "check-signal":
+        from .signal_backup import signal_backup_preflight
+        result=signal_backup_preflight(args.path,Path(workspace))
+        emit(result,True)
+        return 0 if result.get('tool',{}).get('available') else 1
     if args.command == "preflight":
         emit(preflight(Path(workspace),args.platform,args.max_gib*1024**3),True)
         return 0
@@ -456,6 +545,26 @@ def dispatch(args):
         else:
             table(["PLATFORM", "SERIAL", "STATUS"], [[r["platform"], r.get("serial", "—"), r["status"]] for r in result])
         return 0
+    if args.command == 'agent-collection':
+        from .app_backend import handle
+        if args.action == 'configure':
+            emit(configure(workspace, 'mulder', args.mulder_launcher), True)
+            return 0
+        if args.action == 'run':
+            from .agent_collection import execute_plan
+            with connect(workspace, args.case) as (root, db):
+                result = execute_plan(root, db, workspace, args.plan_id)
+        else:
+            request = {'case': args.case, 'action': 'agent-collection-'+('create' if args.action=='authorize' else args.action)}
+            if args.action == 'authorize':
+                request['config'] = {'objective':args.objective,'serial':args.serial,'profiles':args.profile,
+                    'pulls':args.pull,'android_user':args.android_user,'examiner':args.examiner,
+                    'authorized':args.authorize_collection,'max_records':args.max_records,
+                    'max_bytes':args.max_bytes,'timeout':args.timeout}
+            elif args.action == 'status': request['plan_id'] = args.plan_id
+            result = handle(workspace, request)
+        emit(result, True)
+        return 1 if args.action=='run' and result.get('status') in {'partial','failed','interrupted'} else 0
     if args.command == 'engine':
         from .app_backend import handle
         request = {'action': 'engine-'+args.action, 'case': args.case}
@@ -470,6 +579,10 @@ def dispatch(args):
         emit(result, True)
         return 1 if args.action == 'import-output' and result.get('status') in ('partial','failed') else 0
     with connect(workspace, args.case) as (root, db):
+        if args.command == 'import-report':
+            from .parsed_import import import_parsed
+            emit(import_parsed(root,db,args.path,args.format,args.label,contained=args.contained),json_mode)
+            return 0
         if args.command == 'custody':
             from . import custody
             if args.record_json:
@@ -532,11 +645,18 @@ def dispatch(args):
                 return 0 if result['status'] == 'complete' else 1
             emit({**result, "next": f"lawliet analyze --case {args.case} --evidence {result['evidence_id']} --engine auto"}, json_mode)
         elif args.command == "import-chat":
-            result = import_chat(root, db, args.path, args.date_order, args.timezone, args.label, year_century=args.year_century)
+            result = import_chat(root, db, args.path, args.date_order, args.timezone, args.label, year_century=args.year_century,chat_path=args.chat_path,reuse=args.reuse)
             emit(result, json_mode)
             return 0 if result["status"] == "complete" else 1
+        elif args.command == "import-discord":
+            result = import_discord_package(root,db,args.path,args.label,timezone_name=args.timezone,max_bytes=args.max_gib*1024**3,max_files=args.max_files)
+            emit(result,True)
+            return 0 if result['status'] in {'complete','already_imported'} else 1
         elif args.command == "coverage":
             emit(case_coverage(root, db), True)
+        elif args.command == 'case-assess':
+            from .scenario_assessment import assess
+            emit(assess(root, db, args.evidence, args.scenario, args.run), True)
         elif args.command == "finding":
             if args.action == "add":result=add_finding(db,args.artifact_id,args.note,args.examiner)
             elif args.action == "list":result=list_findings(db,args.limit,args.offset)
@@ -642,18 +762,27 @@ def dispatch(args):
             secret = Path(args.passphrase_file).read_text().strip() if args.passphrase_file else getpass.getpass('Legacy Signal backup passphrase: ')
             result = decrypt_signal(root, db, workspace, args.path, secret)
             secret = ''
+            result['decode_status']=result['status']
             result['analysis'] = native_analyze(root, db, result['evidence_id'])
+            if result['analysis'].get('status')!='complete':result['status']='partial'
+            result['message_records']=db.execute("SELECT COUNT(*) FROM artifacts WHERE evidence_id=? AND category='messages' AND json_extract(data,'$.message.app')='signal'",(result['evidence_id'],)).fetchone()[0]
             emit(result, json_mode)
+            return 0 if result['status']=='complete' else 1
         elif args.command == "media-preview":
             from .media import preview
             emit(preview(root, db, args.id), json_mode)
         elif args.command == "collect":
+            if (args.sms_prefix is not None or args.max_sms!=1000) and not (args.platform=='android' and args.profile=='sms-provider'):
+                raise UserError('SMS limits/prefix options require Android --profile sms-provider.')
+            if args.android_user is not None and not (args.platform=='android' and args.profile in {'sms-provider','contacts-provider'}):
+                raise UserError('Android user selection requires an Android SMS or contacts provider profile.')
             if args.platform == "android" and args.profile == "private-apps":
                 if args.pull: raise UserError('Private app collection uses fixed package paths, not --pull.')
                 from .private_apps import collect_private_apps
                 result = collect_private_apps(root, db, workspace, args.serial, args.timeout, args.max_gib * 1024**3)
             elif args.platform == "android" and args.profile != "triage":
-                result = collect_android(root, db, workspace, args.serial, args.profile, args.pull, args.timeout, args.max_gib * 1024**3)
+                result = collect_android(root, db, workspace, args.serial, args.profile, args.pull, args.timeout, args.max_gib * 1024**3,
+                                         args.max_sms,args.android_user,args.sms_prefix)
             else:
                 if args.pull or args.profile != "triage":
                     raise UserError("Use an Android messages/logical/files profile with --pull.")

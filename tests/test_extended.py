@@ -58,7 +58,7 @@ class ExtendedTests(unittest.TestCase):
 
     def test_signal_private_terminal_does_not_log_secret(self):
         tool=self.base/'decoder.py'
-        tool.write_text("import sys,sqlite3,pathlib\nsecret=input()\nassert secret not in sys.argv\nprint('CIPHERKEY:'+secret)\nprint(secret,file=sys.stderr)\nout=pathlib.Path(sys.argv[sys.argv.index('--output')+1]);c=sqlite3.connect(out/'database.sqlite');c.execute('CREATE TABLE fixture(id INTEGER)');c.commit();c.close()\n")
+        tool.write_text("import sys,sqlite3,pathlib\nif '--help' in sys.argv: print('source version synthetic --output --stoponerror'); sys.exit(0)\nsecret=input()\nassert secret not in sys.argv\nprint('CIPHERKEY:'+secret)\nprint(secret,file=sys.stderr)\nout=pathlib.Path(sys.argv[sys.argv.index('--output')+1]);c=sqlite3.connect(out/'database.sqlite');c.execute('CREATE TABLE fixture(id INTEGER)');c.commit();c.close()\n")
         configure(self.workspace,'signalbackup-tools',tool,sys.executable)
         source=self.base/'fixture.backup';source.write_bytes(b'encrypted-fixture')
         secret='123456789012345678901234567890'

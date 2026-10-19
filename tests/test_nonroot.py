@@ -34,9 +34,9 @@ class NonrootTests(unittest.TestCase):
         self.assertEqual(provider_state('unexpected'),'unresolved')
     def test_assessment_logs_denial_and_never_changes_permissions(self):
         commands=[]
-        def execute(argv,out,timeout):
+        def execute(argv,out,timeout,**kwargs):
             commands.append(argv);out=Path(out);out.parent.mkdir(parents=True,exist_ok=True)
-            content='device\n' if argv[-1]=='get-state' else 'java.lang.SecurityException: Permission Denial' if 'query' in argv else ''
+            content='device\n' if argv[-1]=='get-state' else '0\n' if argv[-1]=='get-current-user' else 'java.lang.SecurityException: Permission Denial' if '--projection' in argv[-1] else ''
             out.write_text(content);err=Path(str(out)+'.stderr');err.write_text('')
             return {'argv':argv,'returncode':0,'stderr':str(err)}
         with connect(self.ws,'qa') as (root,db),patch('lawliet_mobile.phone_assessment.command',return_value=['adb']),patch('lawliet_mobile.phone_assessment.execute',side_effect=execute):

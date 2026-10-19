@@ -8,7 +8,7 @@ MODULES={'native':'native','aleapp':'aleapp','ileapp':'ileapp','leapp':'leapp',
          'mvt':'mvt','mvt-ios':'mvt','sqlite-dissect':'sqlite-dissect','exiftool':'exiftool'}
 REASONS={'requested':'requested_scope','collected':'supplied_bytes_retained','excluded':'excluded_scope',
          'inaccessible':'source_not_accessible','collection-unresolved':'collection_state_unknown',
-         'unsupported':'unsupported_input','parser-failed':'processing_error','parsed':'indexed_records',
+         'unsupported':'unsupported_input','parser-failed':'processing_error','parsed':'indexed_records','parsed-empty':'recognized_empty_supplied_view',
          'unresolved':'parsing_state_unknown','reviewed':'operator_review_recorded',
          'verified':'operator_verification_recorded','searched-with-no-finding':'indexed_search_no_match',
          'decryption-succeeded':'decryption_completed','decryption-failed':'decryption_error'}
@@ -80,6 +80,11 @@ class Context:
              'origin':'operator-recorded' if entry.get('origin')=='explicit' else 'derived',
              'applies_to':'run' if run_wide else 'source','observation_count':1}
         from .coverage_ledger import _ExpectedSourceGap, EXPECTED_REASONS, EXPECTATION_KIND
+        from .coverage_ledger import _EncryptedInputRefusal
+        from .analysis_refusal import ENCRYPTED_INPUT
+        if isinstance(entry, _EncryptedInputRefusal) and entry.get('execution_started') is False:
+            row['reason_code'] = ENCRYPTED_INPUT
+            row['execution_started'] = False
         if (isinstance(entry, _ExpectedSourceGap) and entry.get('origin') == 'derived'
                 and entry.get('state') == 'collection-unresolved'
                 and entry.get('expectation_kind') == EXPECTATION_KIND
