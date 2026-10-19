@@ -25,6 +25,7 @@ def _api():
         'CreateJobObjectW': ([wintypes.LPVOID, wintypes.LPCWSTR], wintypes.HANDLE),
         'SetInformationJobObject': ([wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD], wintypes.BOOL),
         'AssignProcessToJobObject': ([wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
+        'TerminateJobObject': ([wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
         'CloseHandle': ([wintypes.HANDLE], wintypes.BOOL),
     }
     for name, (args, result) in signatures.items():
@@ -125,6 +126,9 @@ def _close_job_when_released(api, job, descriptor):
             pass
     finally:
         os.close(descriptor)
+        # Windows' implicit KILL_ON_JOB_CLOSE may report exit code zero. Give
+        # explicit cancellation a failure code; closing remains the final guard.
+        api.TerminateJobObject(job, 125)
         api.CloseHandle(job)
 
 

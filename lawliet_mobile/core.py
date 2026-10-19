@@ -186,8 +186,9 @@ def _copy_tree(source, target, max_bytes, max_files):
     if source.is_dir():
         for current, dirs, files in os.walk(source, followlinks=False):
             for name in dirs + files:
-                if (Path(current) / name).is_symlink():
-                    raise UserError("Evidence contains symlinks; supply a regular-file extraction.")
+                item = Path(current) / name
+                if item.is_symlink() or getattr(item.lstat(), 'st_file_attributes', 0) & 0x400:
+                    raise UserError("Evidence contains symlinks or reparse points; supply a regular-file extraction.")
             for name in files:
                 original = Path(current) / name
                 if not original.is_file():
@@ -207,8 +208,8 @@ def _copy_tree(source, target, max_bytes, max_files):
 
 def import_evidence(root, db, source, platform="auto", label=None, max_bytes=20 * 1024**3, max_files=100000, expand_archives=True):
     original = Path(source).expanduser()
-    if original.is_symlink():
-        raise UserError("Evidence input must not be a symlink.")
+    if original.is_symlink() or (original.exists() and getattr(original.lstat(), 'st_file_attributes', 0) & 0x400):
+        raise UserError("Evidence input must not be a symlink or reparse point.")
     source = original.resolve()
     if not source.exists() or not (source.is_dir() or source.is_file()):
         raise UserError(f"Evidence not found or not a regular file/directory: {source}")

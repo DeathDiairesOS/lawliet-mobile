@@ -11,8 +11,8 @@ dependencies = []
 
 [project.optional-dependencies]
 windows = ["tzdata>=2025.2"]
-desktop = ["pywebview>=6,<7", "tzdata>=2025.2; sys_platform == 'win32'"]
-desktop-qt = ["pywebview[qt]>=6,<7", "tzdata>=2025.2; sys_platform == 'win32'"]
+desktop = ["pywebview==6.2.1", "tzdata>=2025.2; sys_platform == 'win32'"]
+desktop-qt = ["pywebview[qt]==6.2.1", "tzdata>=2025.2; sys_platform == 'win32'"]
 
 [project.gui-scripts]
 lawliet-desktop = "lawliet_mobile.desktop:main"

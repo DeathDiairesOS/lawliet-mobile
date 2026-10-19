@@ -219,7 +219,7 @@ def _worker_lock(path):
         raise
 
 
-def run(workspace, case, jid):
+def run(workspace, case, jid, *, close_worker_logs=False):
     from .mulder_results import ingest
     with connect(workspace, case) as (root, _):
         path = job_path(root, jid)
@@ -285,8 +285,23 @@ def run(workspace, case, jid):
         if lock is not None:
             os.close(lock)
         state['finished_at'] = now()
+        if os.name == 'nt' and close_worker_logs:
+            # A terminal state means the detached worker has released its log
+            # files too. Windows otherwise refuses case cleanup during Python's
+            # final interpreter shutdown. Only the dedicated CLI owns these fds.
+            for stream in (sys.stdout, sys.stderr):
+                try:
+                    stream.flush()
+                    stream.close()
+                except (OSError, ValueError):
+                    pass
+            for descriptor in (1, 2):
+                try:
+                    os.close(descriptor)
+                except OSError:
+                    pass
         atomic_json(path / 'status.json', state)
 
 
 if __name__ == '__main__':
-    run(*sys.argv[1:4])
+    run(*sys.argv[1:4], close_worker_logs=True)

@@ -71,7 +71,10 @@ def main(argv=None):
         if isinstance(result, dict): outcome.update(result)
         else: outcome.update(ok=False, error='Invalid native-window smoke result')
         completed.set()
-    bridge = DesktopBridge(workspace, smoke_fixture=synthetic_fixture(temporary.name) if temporary else None,
+    fixture = synthetic_fixture(temporary.name) if temporary else None
+    originals = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                 for p in Path(fixture['path']).iterdir()} if fixture else {}
+    bridge = DesktopBridge(workspace, smoke_fixture=fixture,
                            smoke_result=record if temporary else None)
     # Deliberately in-memory HTML: no local static-file server exposes case data.
     webview.settings['ALLOW_DOWNLOADS'] = False
@@ -89,6 +92,11 @@ def main(argv=None):
             window.run_js("(function start(){if(window.pywebview && window.lawlietSmoke){window.lawlietSmoke();}else{setTimeout(start,100);}})();")
             if not completed.wait(120):
                 record({'ok': False, 'error': 'Native-window smoke test timed out'})
+        current = {p.name: hashlib.sha256(p.read_bytes()).hexdigest()
+                   for p in Path(fixture['path']).iterdir()}
+        outcome['originals_unchanged'] = current == originals
+        if current != originals:
+            outcome.update(ok=False, error='Original synthetic evidence changed during examination')
         args.smoke_test.parent.mkdir(parents=True, exist_ok=True)
         args.smoke_test.write_text(json.dumps(outcome, indent=2)+'\n', encoding='utf-8')
         window.destroy()

@@ -14,7 +14,20 @@ MAX_OUTPUT=128*1024**2
 def create_run_directory(root, rid):
  """Create a private run without following any existing path component."""
  if not re.fullmatch('[0-9a-f]{12}',rid):raise UserError('Run identity malformed.')
- root=Path(root).absolute();fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY)
+ root=Path(root).absolute()
+ if os.name=='nt':
+  from .windows_files import WindowsDirectory
+  try:
+   with WindowsDirectory(root):
+    runs=root/'runs'
+    try:runs.mkdir(mode=0o700)
+    except FileExistsError:pass
+    with WindowsDirectory(runs):
+     target=runs/rid;target.mkdir(mode=0o700)
+     with WindowsDirectory(target):pass
+   return target
+  except OSError as exc:raise UserError('Run directory cannot be created safely.') from exc
+ fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY)
  try:
   for part in root.parts[1:]:
    next_fd=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd)

@@ -48,8 +48,24 @@ python3 -m venv .desktop-venv
 .desktop-venv/bin/lawliet-desktop --renderer qt
 ```
 
-Qt requires the host display/X11 or Wayland libraries. Ubuntu may need
-`libegl1`, `libopengl0`, `libxcb-cursor0`, `libxkbcommon-x11-0` and `libnss3`.
+Qt requires host display libraries in addition to its Python packages. For the
+Ubuntu 24.04 X11 route used in CI, install the runtime dependencies below:
+
+```sh
+sudo apt-get install --no-install-recommends -y \
+  libegl1 libopengl0 libx11-xcb1 libxcb-cursor0 libxkbcommon-x11-0 \
+  libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 \
+  libxcb-shape0 libxcb-randr0 libxcb-xfixes0 libxcb-sync1 libxcb-shm0 \
+  libxi6 libxrender1 libfontconfig1 libsm6 libice6 libnss3 libasound2t64
+```
+
+The list follows [Qt's X11 requirements](https://doc.qt.io/qt-6/linux-requirements.html),
+plus OpenGL and WebEngine runtime libraries. Package names vary by distribution.
+CI adds `xvfb` and `xauth` to provide a virtual display; an ordinary desktop session
+already provides its display. CI also checks the installed Qt plugin's linked
+libraries before launch. An xcb loader error can indicate a missing dependency
+other than the cursor library named in Qt's generic message.
+
 Alternatively, use the smaller system GTK/WebKit renderer with the `desktop`
 extra and your distribution's PyGObject, GTK 3 and WebKitGTK 4.1 packages; Python
 must be able to import the system `gi` bindings. GTK is not the automated Linux
@@ -110,8 +126,10 @@ python -m lawliet_mobile.desktop --workspace /tmp/lawliet-desktop-check \
 ```
 
 Use unused local paths on Windows instead of `/tmp`. The smoke actually creates,
-imports, parses, renders views, verifies a media preview, saves a finding, opens a
-report and rechecks evidence hashes. It performs no USB discovery, collection,
+imports, parses, filters and searches artifacts, opens source details, submits a
+read-only SQLite query through the actual dialog, verifies a media preview, saves
+a finding, opens a report and rechecks evidence hashes. It also checks that an
+HTML-looking source message remains literal text. It performs no USB discovery, collection,
 model calls, report approval or customer release. A result of `ok: true` is scoped
 to those synthetic checks. `.github/workflows/desktop.yml` runs the window check
 on Windows, macOS and Linux and retains the result and logs.

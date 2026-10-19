@@ -174,3 +174,46 @@ class WindowsFileBoundaries(unittest.TestCase):
             with self.subTest(name=name), self.assertRaises(UserError):
                 extract_archive(archive, target)
             self.assertEqual(list(target.rglob('*')), [])
+
+    def test_host_query_run_creation_is_exclusive_and_rejects_junction(self):
+        from lawliet_mobile.container_runner import create_run_directory
+        case = self.root / 'case'; case.mkdir()
+        run = create_run_directory(case, 'a' * 12)
+        self.assertTrue(run.is_dir())
+        (run / 'retained').write_bytes(b'original')
+        with self.assertRaises(UserError):
+            create_run_directory(case, 'a' * 12)
+        self.assertEqual((run / 'retained').read_bytes(), b'original')
+        case2 = self.root / 'case2'; case2.mkdir()
+        target = self.root / 'outside'; target.mkdir()
+        link = case2 / 'runs'
+        result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(link), str(target)],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        try:
+            with self.assertRaises((UserError, OSError)):
+                create_run_directory(case2, 'b' * 12)
+        finally:
+            link.rmdir()
+        self.assertEqual(list(target.iterdir()), [])
+
+    def test_evidence_intake_rejects_root_and_nested_junctions(self):
+        from lawliet_mobile.core import _copy_tree, import_evidence
+        source = self.root / 'source'; source.mkdir()
+        outside = self.root / 'outside'; outside.mkdir()
+        (outside / 'secret').write_bytes(b'foreign')
+        link = source / 'junction'
+        result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(link), str(outside)],
+                                capture_output=True, text=True, timeout=10)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        output = self.root / 'output'; output.mkdir()
+        try:
+            with self.assertRaises(UserError):
+                _copy_tree(source, output, 1000, 10)
+            # Root junction rejection precedes case or database mutation.
+            with self.assertRaises(UserError):
+                import_evidence(self.root / 'absent-case', None, link)
+        finally:
+            link.rmdir()
+        self.assertEqual(list(output.iterdir()), [])
+        self.assertEqual((outside / 'secret').read_bytes(), b'foreign')

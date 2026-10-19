@@ -65,6 +65,7 @@ class DesktopBridgeTests(unittest.TestCase):
             {'action': 'records', 'case': '../A'},
             {'action': 'import-evidence', 'case': 'A', 'path': self.fixture['path']},
             {'action': 'desktop-smoke-fixture'},
+            {'action': 'customer-report-approve', 'case': 'A', 'draft_id': 'unreviewed'},
             {'action': 'collect', 'case': 'A', 'platform': 'android', 'serial': 'SYNTHETIC'},
         ):
             with self.subTest(action=request['action']), patch.object(self.bridge, '_invoke', side_effect=AssertionError('must not execute')):

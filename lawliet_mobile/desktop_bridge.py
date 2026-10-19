@@ -263,6 +263,10 @@ class DesktopBridge:
                 folder = self._workspace/request['case']
                 if folder.is_symlink() or not folder.resolve().is_relative_to(self._workspace):
                     raise UserError('Case path must remain inside the selected workspace.')
+            if action in {'customer-report-approve', 'customer-report-release',
+                          'customer-report-redacted-approve', 'customer-report-redacted-release'}:
+                if not re.fullmatch(r'[0-9a-f]{64}', str(request.get('expected_manifest_sha256', ''))):
+                    raise UserError('Review the exact report bytes before approval or release.')
             if action == 'collect' and request.get('authorized') is not True:
                 raise UserError('Explicit authorization is required for device collection.')
             if action in PATH_ACTIONS:

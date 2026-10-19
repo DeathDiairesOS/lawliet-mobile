@@ -104,7 +104,7 @@ def _worker(request_path,metadata_path):
             cursor=db.execute(request['query'],request['parameters'])
             if cursor.description is None:raise RuntimeError('Query did not return a read-only result table')
             result['columns']=[column[0] for column in cursor.description]
-            with output.open('x',encoding='utf-8') as stream:
+            with output.open('x',encoding='utf-8',newline='\n') as stream:
                 for row in cursor:
                     if time.monotonic()>deadline:raise TimeoutError('SQLite query deadline reached')
                     encoded=json.dumps([_cell(value) for value in row],ensure_ascii=True,allow_nan=False)+'\n'

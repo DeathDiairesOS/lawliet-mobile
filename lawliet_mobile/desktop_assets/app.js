@@ -153,6 +153,7 @@
   window.lawlietSmoke=async()=>{
     const steps=[];
     let outcome;
+    async function waitFor(check,label){const deadline=Date.now()+35000;while(Date.now()<deadline){if(check())return;await new Promise(resolve=>setTimeout(resolve,25));}throw new Error('Smoke UI action timed out: '+label+' · '+$('notice').textContent);}
     try{
       const fixture=await api('desktop-smoke-fixture',{},'');
       if(!fixture.case_id||!fixture.path)throw new Error('Synthetic smoke fixture is unavailable.');
@@ -173,6 +174,42 @@
         if(!$('view').children.length)throw new Error('Empty rendered view: '+view);
         steps.push({step:'render',view,title:$('page-title').textContent});
       }
+      // Exercise the real category/search handlers and evidence inspector. The
+      // hostile-looking value must remain literal text through every view.
+      await navigate('artifacts');
+      const category=document.querySelector('[aria-label="Artifact category"]');
+      category.value='messages';category.dispatchEvent(new Event('change'));
+      await waitFor(()=>S.pending===0&&document.querySelector('[aria-label="Artifact category"]')?.value==='messages','message category');
+      const search=document.querySelector('[aria-label="Search parsed evidence"]');
+      search.value='onerror';
+      [...$('view').querySelectorAll('button')].find(b=>b.textContent==='Search').click();
+      await waitFor(()=>S.pending===0&&S.query==='onerror','artifact search');
+      const matched=[...$('view').querySelectorAll('.artifact-table tbody tr')];
+      const literal='<img src=x onerror="window.evidenceExecuted=true">';
+      if(matched.length!==1||!matched[0].textContent.includes(literal))throw new Error('Filtered search did not render the exact synthetic message as text.');
+      matched[0].click();
+      await waitFor(()=>S.pending===0&&document.querySelector('.inspector')?.textContent.includes(literal),'source inspector');
+      if(document.querySelector('#view img[onerror]')||window.evidenceExecuted)throw new Error('Evidence content became executable markup.');
+      steps.push({step:'search_filter_inspector',category:'messages',query:'onerror',matched_rows:matched.length,literal_text_preserved:true});
+      S.query='';S.category='';
+      await navigate('files');
+      const inventory=await api('file-inventory',{query:'sms.db',offset:0,limit:100},fixture.case_id);
+      const database=inventory.files.find(file=>file.logical_path.split('/').at(-1)==='sms.db');
+      if(!database)throw new Error('Synthetic SQLite source is absent from the retained inventory.');
+      const fileRow=[...$('view').querySelectorAll('tbody tr')].find(row=>row.firstElementChild?.textContent===database.logical_path);
+      const sqliteButton=fileRow&&[...fileRow.querySelectorAll('button')].find(b=>b.textContent==='SQLite');
+      if(!sqliteButton)throw new Error('SQLite examination action did not render for the retained source.');
+      sqliteButton.click();
+      await waitFor(()=>document.querySelector('.modal textarea'),'SQLite query dialog');
+      document.querySelector('.modal textarea').value='SELECT _id, body FROM sms ORDER BY _id';
+      document.querySelector('.modal').requestSubmit();
+      await waitFor(()=>S.pending===0&&document.querySelector('.modal h2')?.textContent==='SQLite query result','read-only SQLite query');
+      const queried=JSON.parse(document.querySelector('.modal pre').textContent);
+      if(queried.status!=='complete'||queried.preview?.rows?.length!==2||queried.preview.rows[1][1]!==literal)throw new Error('SQLite UI query did not return the two expected unchanged messages: '+(queried.error||queried.status));
+      if(window.evidenceExecuted||document.querySelector('.modal img[onerror]'))throw new Error('SQLite evidence executed as markup.');
+      steps.push({step:'sqlite_query_ui',file_id:database.id,run_id:queried.run_id,rows:queried.preview.rows.length,columns:queried.preview.columns,result_sha256:queried.preview.result_sha256});
+      document.querySelector('.modal').requestSubmit();
+      await waitFor(()=>!document.querySelector('.modal'),'close SQLite result');
       if(window.evidenceExecuted)throw new Error('Evidence content executed as a script.');
       const image=page.records.find(r=>r.category==='media');
       if(image){const result=await bridgeCall(()=>window.pywebview.api.media({case:fixture.case_id,artifact_id:image.id}));if(!result?.ok||!result.result?.data_url)throw new Error(result?.error||'Synthetic media preview failed.');steps.push({step:'media',artifact_id:image.id,sha256:result.result.sha256,mime:result.result.mime});}

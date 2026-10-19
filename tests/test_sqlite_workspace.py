@@ -19,6 +19,7 @@ class SQLiteWorkspaceTests(unittest.TestCase):
             fid=self.intake(root,db);before=tree_hashes(root/'evidence')
             result=sw.schema(root,db,fid);self.assertEqual(result['state'],'parsed');self.assertIn('sms',str(result['preview']))
             result=sw.query(root,db,fid,'SELECT _id AS same,body AS same,payload,NULL FROM sms WHERE _id>=? ORDER BY _id',[1])
+            self.assertEqual(result['bytes_written'],Path(result['result_path']).stat().st_size)
             self.assertEqual(result['preview']['columns'][:2],['same','same']);row=result['preview']['rows'][0]
             self.assertIn('😀',row[1]);self.assertEqual(row[2],{'sqlite_blob_hex':'00ff'});self.assertIsNone(row[3])
             page=sw.read_result(root,db,result['run_id'],offset=1,limit=2);self.assertEqual(page['rows'][0][0],2);self.assertTrue(page['has_more'])
