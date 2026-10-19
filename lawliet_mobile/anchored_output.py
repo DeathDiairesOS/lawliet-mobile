@@ -20,12 +20,33 @@ class OutputFiles:
         self.owned = {}
         self.stages = {}
         self.file_fds = []
+        self.windows = None
+        self.windows_files = {}
         if not self.paths or len(set(self.paths)) != len(self.paths) or len({p.parent for p in self.paths}) != 1:
             raise UserError('Outputs require distinct files in one directory.')
-        if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
+        if os.name != 'nt' and (not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY')):
             raise UserError('Safe export requires no-follow directory APIs on this platform.')
 
     def __enter__(self):
+        if os.name == 'nt':
+            from .windows_files import WindowsDirectory, component
+            for path in self.paths:
+                component(path.name)
+            if len({str(p).casefold() for p in self.paths}) != len(self.paths):
+                raise UserError('Export filenames must be distinct on Windows.')
+            self.windows = WindowsDirectory(self.paths[0].parent, create=True).__enter__()
+            try:
+                for path in self.paths:
+                    try:
+                        path.lstat()
+                    except FileNotFoundError:
+                        continue
+                    raise FileExistsError('Choose new export and companion filenames.')
+                return self
+            except BaseException:
+                self.windows.close()
+                self.windows = None
+                raise
         parent = self.paths[0].parent
         if '..' in parent.parts:
             raise UserError('Export parent traversal is unsupported.')
@@ -54,6 +75,9 @@ class OutputFiles:
             raise
 
     def check_parent(self):
+        if self.windows is not None:
+            self.windows.check()
+            return
         # Reopen the complete chain rather than following a replaced ancestor.
         parent = self.paths[0].parent
         fd = os.open(parent.anchor, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
@@ -74,6 +98,12 @@ class OutputFiles:
 
     def open(self, path):
         path = Path(path)
+        if self.windows is not None:
+            if path.absolute() not in self.paths or path.name in self.windows_files:
+                raise UserError('Export path was not authorized or is already open.')
+            stage, fd = self.windows.new_file()
+            self.windows_files[path.name] = {'fd': fd, 'published': False, 'stage': stage}
+            return os.fdopen(os.dup(fd), 'w', encoding='utf-8', newline='\n')
         self.check_parent()
         name = '.lawliet-export-' + secrets.token_hex(16)
         fd = os.open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600, dir_fd=self.fd)
@@ -85,6 +115,8 @@ class OutputFiles:
         return os.fdopen(os.dup(fd), 'w', encoding='utf-8')
 
     def digest(self, path):
+        if self.windows is not None:
+            return self.windows.digest(self.windows_files[Path(path).name]['fd'])
         name = self.stages.get(Path(path).name, Path(path).name)
         self.check_parent()
         fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=self.fd)
@@ -105,6 +137,17 @@ class OutputFiles:
             os.close(fd)
 
     def publish(self):
+        if self.windows is not None:
+            self.check_parent()
+            if set(self.windows_files) != {p.name for p in self.paths}:
+                raise UserError('All export outputs must be written before publishing.')
+            for path in self.paths:
+                entry = self.windows_files[path.name]
+                self.windows.digest(entry['fd'])
+                self.windows.rename(entry['fd'], path.name)
+                entry['published'] = True
+            self.check_parent()
+            return
         self.check_parent()
         for path in self.paths:
             stage = self.stages[path.name]
@@ -118,6 +161,17 @@ class OutputFiles:
         self.check_parent()
 
     def __exit__(self, kind, value, trace):
+        if self.windows is not None:
+            try:
+                for entry in self.windows_files.values():
+                    if kind or not entry['published']:
+                        self.windows.delete(entry['fd'])
+            finally:
+                for entry in self.windows_files.values():
+                    os.close(entry['fd'])
+                self.windows.close()
+                self.windows = None
+            return
         try:
             names = list(self.owned) if kind else list(self.stages.values())
             for name in names:

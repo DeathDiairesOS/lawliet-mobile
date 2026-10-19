@@ -7,20 +7,26 @@ CURRENT=contextvars.ContextVar('runner_lease',default=None)
 @contextlib.contextmanager
 def lease(root,db):
  from .core import UserError,audit,json_text,now,verify
- if os.name!='posix':raise UserError('External runner ownership is unsupported on this platform.')
- import fcntl
+ if os.name not in ('posix','nt'):raise UserError('External runner ownership is unsupported on this platform.')
  root=Path(root)
- if any(p.is_symlink() for p in (root,*root.parents)):raise UserError('Runner case path symlink refused.')
+ if any(p.is_symlink() or (os.name=='nt' and getattr(p.lstat(),'st_file_attributes',0)&0x400) for p in (root,*root.parents)):raise UserError('Runner case path symlink or reparse point refused.')
  path=root/'.external-runner.lease'
  flags=os.O_RDWR|os.O_CREAT|getattr(os,'O_NOFOLLOW',0)|getattr(os,'O_NONBLOCK',0)
- try:fd=os.open(path,flags,0o600)
+ try:
+  if os.name=='nt':
+   from .runner_windows import open_lease
+   fd=open_lease(path)
+  else:fd=os.open(path,flags,0o600)
+ except BlockingIOError as exc:raise UserError('A runner or its child still owns this case; retry refused.') from exc
  except OSError as exc:raise UserError('Runner lease cannot be opened safely.') from exc
  token=None
  try:
   value=os.fstat(fd)
-  if not stat.S_ISREG(value.st_mode) or value.st_nlink!=1 or (value.st_dev,value.st_ino)!=(path.stat().st_dev,path.stat().st_ino):raise UserError('Runner lease inode is unsafe.')
-  try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
-  except BlockingIOError as exc:raise UserError('A runner or its child still owns this case; retry refused.') from exc
+  if not stat.S_ISREG(value.st_mode) or value.st_nlink!=1 or getattr(value,'st_file_attributes',0)&0x400 or (value.st_dev,value.st_ino)!=(path.stat().st_dev,path.stat().st_ino):raise UserError('Runner lease inode is unsafe.')
+  if os.name=='posix':
+   import fcntl
+   try:fcntl.flock(fd,fcntl.LOCK_EX|fcntl.LOCK_NB)
+   except BlockingIOError as exc:raise UserError('A runner or its child still owns this case; retry refused.') from exc
   raw=os.read(fd,4097)
   if not raw:
    os.write(fd,(PROTOCOL+'\n').encode());os.fsync(fd)
@@ -77,6 +83,9 @@ def spawn(argv,*,cwd,stdout,stderr,stdin_fd=None):
   if type(stdin_fd) is not int or stdin_fd<0:raise ValueError('stdin_fd must be an open descriptor.')
   os.fstat(stdin_fd)
  context=CURRENT.get()
+ if os.name=='nt':
+  from .runner_windows import spawn as windows_spawn
+  return windows_spawn(argv,cwd=cwd,stdout=stdout,stderr=stderr,lease_fd=context['fd'] if context else None,stdin_fd=stdin_fd)
  if context is None:return subprocess.Popen(argv,cwd=cwd,stdout=stdout,stderr=stderr,stdin=stdin_fd if stdin_fd is not None else subprocess.DEVNULL,start_new_session=(os.name!='nt')),None
  if os.name!='posix':raise RuntimeError('Runner guardian requires POSIX; unsupported platform refused.')
  config=json.dumps({'argv':argv,'cwd':str(cwd) if cwd else None,**({'stdin_fd':stdin_fd} if stdin_fd is not None else {})}).encode()

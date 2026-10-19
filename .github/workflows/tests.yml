@@ -19,6 +19,9 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Check repository publishing boundaries
         run: python tools/repository_preflight.py
+      - name: Check Windows file and process ownership
+        if: runner.os == 'Windows'
+        run: python -m unittest tests.test_runner_windows tests.test_windows_file_boundaries -v
       - name: Run standard-library tests
         run: python -m unittest discover -s tests -v
       - name: Exercise the CLI

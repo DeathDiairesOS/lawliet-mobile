@@ -10,6 +10,7 @@ class ChildOutputs:
     def __init__(self, directory):
         self.directory = Path(directory).absolute()
         self.fd = None
+        self.windows = None
 
     def _directory(self):
         if '..' in self.directory.parts:
@@ -26,10 +27,17 @@ class ChildOutputs:
             raise
 
     def __enter__(self):
+        if os.name == 'nt':
+            from .windows_files import WindowsDirectory
+            self.windows = WindowsDirectory(self.directory).__enter__()
+            return self
         self.fd = self._directory()
         return self
 
     def check_directory(self):
+        if self.windows is not None:
+            self.windows.check()
+            return
         fd = self._directory()
         try:
             current, original = os.fstat(fd), os.fstat(self.fd)
@@ -39,6 +47,8 @@ class ChildOutputs:
             os.close(fd)
 
     def read(self, name, maximum, *, prefix=False):
+        if self.windows is not None:
+            return self.windows.read(name, maximum, prefix=prefix)
         if not name or Path(name).name != name or name in ('.', '..'):
             raise UserError('Unsafe child output filename.')
         self.check_directory()
@@ -64,5 +74,9 @@ class ChildOutputs:
             os.close(fd)
 
     def __exit__(self, *args):
+        if self.windows is not None:
+            self.windows.close()
+            self.windows = None
+            return
         os.close(self.fd)
         self.fd = None

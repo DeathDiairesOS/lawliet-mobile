@@ -1,5 +1,7 @@
 import tempfile
 import unittest
+import re
+from xml.parsers import expat
 from pathlib import Path
 from unittest.mock import patch
 from lawliet_mobile.app_backend import handle
@@ -15,6 +17,7 @@ class NonrootTests(unittest.TestCase):
         result=handle(self.ws,{'action':'import-evidence','case':'qa','path':str(source)})
         rows=handle(self.ws,{'action':'records','case':'qa','evidence':result['evidence_id']})['records']
         return result,rows
+    @unittest.skipUnless(tuple(map(int,re.findall(r'\d+',expat.EXPAT_VERSION)[:3])) >= (2,7,2), 'XML decoding requires Expat >= 2.7.2')
     def test_xml_sms_mms_rcs_and_calls(self):
         result,rows=self.intake('sms.xml','''<smses count="2"><sms address="+12025550100" date="1791640800123" type="1" body="First &amp; second"/><mms date="1791640800456" msg_box="2" s_chat="1"><parts><part ct="text/plain" text="Multimedia text"/><part ct="image/png" cl="x.png" data="YWJj"/></parts><addrs><addr type="151" address="+12025550100"/><addr type="137" address="insert-address-token"/></addrs></mms></smses>''')
         self.assertEqual(result['analysis']['status'],'complete');self.assertEqual(len(rows),2)

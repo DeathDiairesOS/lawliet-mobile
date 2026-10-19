@@ -2,6 +2,7 @@
 import hashlib
 import json
 import os
+import sqlite3
 from pathlib import Path
 import subprocess
 import sys
@@ -18,7 +19,10 @@ class NativeJobOwnership(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
         self.base=Path(self.tmp.name).resolve();self.ws=self.base/'cases';create_case(self.ws,'A')
-        self.source=self.base/'sms.xml';self.source.write_text('<smses count="1"><sms address="seed" date="1700000000000" type="1" body="NATIVE-RESTART café 東京"/></smses>')
+        self.source=self.base/'sms.db'
+        with sqlite3.connect(self.source) as fixture:
+            fixture.execute('CREATE TABLE sms(_id INTEGER,address TEXT,body TEXT,date INTEGER,type INTEGER)')
+            fixture.execute('INSERT INTO sms VALUES(1,?,?,1700000000000,1)',('seed','NATIVE-RESTART café 東京'))
         self.source_hash=hashlib.sha256(self.source.read_bytes()).hexdigest()
         with connect(self.ws,'A') as (root,db):self.eid=import_evidence(root,db,self.source,'android')[0]
 

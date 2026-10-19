@@ -2,6 +2,8 @@
 import json
 import tempfile
 import unittest
+import re
+from xml.parsers import expat
 from pathlib import Path
 from unittest.mock import patch
 from lawliet_mobile.app_backend import handle
@@ -9,6 +11,7 @@ from lawliet_mobile.core import connect,create_case,digest,verify
 from lawliet_mobile.xml_backup import xml_backup_records
 
 
+@unittest.skipUnless(tuple(map(int,re.findall(r'\d+',expat.EXPAT_VERSION)[:3])) >= (2,7,2), 'XML decoding requires Expat >= 2.7.2')
 class XMLBoundaryTests(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
@@ -89,3 +92,13 @@ class XMLBoundaryTests(unittest.TestCase):
         p.write_text('<smses><sms/><sms/></smses>')
         with patch('lawliet_mobile.xml_backup.MAX_RECORDS',1),self.assertRaisesRegex(ValueError,'records'):xml_backup_records(p)
         with patch('lawliet_mobile.xml_backup.MAX_ELEMENTS',2),self.assertRaisesRegex(ValueError,'bound'):xml_backup_records(p)
+
+
+class XMLRuntimeRefusalTests(unittest.TestCase):
+    def test_unsupported_expat_is_reported_without_parsing(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory)/'known.xml'
+            source.write_text('<smses count="0"/>')
+            with patch('lawliet_mobile.xml_backup.expat.EXPAT_VERSION', 'expat_2.6.0'):
+                with self.assertRaisesRegex(ValueError, 'Expat >= 2.7.2'):
+                    xml_backup_records(source)
