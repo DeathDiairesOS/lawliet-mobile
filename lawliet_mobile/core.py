@@ -66,15 +66,55 @@ def case_dir(workspace, case):
     return Path(workspace).expanduser().resolve() / case
 
 
+def _case_boundary(root):
+    """Reject aliased cases and record their current filesystem identities.
+
+    These checks detect static links and observed replacement. They do not lock
+    the directory against an unrelated process swapping paths concurrently.
+    """
+    try:
+        folder = root.lstat()
+        database = (root / 'case.sqlite').lstat()
+    except FileNotFoundError as exc:
+        raise UserError(f"Unknown case {root.name!r}. Create it with: lawliet case create {root.name}") from exc
+    if not stat.S_ISDIR(folder.st_mode) or getattr(folder, 'st_file_attributes', 0) & 0x400:
+        raise UserError('Case directory must be a regular directory, not a link or reparse point.')
+    if (not stat.S_ISREG(database.st_mode) or database.st_nlink != 1
+            or getattr(database, 'st_file_attributes', 0) & 0x400):
+        raise UserError('Case database must be a regular, single-link file without a reparse point.')
+    # SQLite may open these before the first SQL statement, including journal
+    # recovery. A valid main database must not authorize an aliased companion.
+    for suffix in ('-journal', '-wal', '-shm'):
+        try:
+            companion = (root / ('case.sqlite' + suffix)).lstat()
+        except FileNotFoundError:
+            continue
+        if (not stat.S_ISREG(companion.st_mode) or companion.st_nlink != 1
+                or getattr(companion, 'st_file_attributes', 0) & 0x400):
+            raise UserError('Case database companion must be a regular, single-link file without a reparse point.')
+    return ((folder.st_dev, folder.st_ino), (database.st_dev, database.st_ino))
+
+
 @contextmanager
 def connect(workspace, case):
     root = case_dir(workspace, case)
-    if not (root / "case.sqlite").is_file():
-        raise UserError(f"Unknown case {case!r}. Create it with: lawliet case create {case}")
-    db = sqlite3.connect(root / "case.sqlite")
-    db.row_factory = sqlite3.Row
-    db.execute("PRAGMA foreign_keys=ON")
+    identity = _case_boundary(root)
+    # An existing case is required. SQLite's default mode would create a new
+    # empty database if the checked file disappeared before connection.
+    db = sqlite3.connect((root / 'case.sqlite').as_uri() + '?mode=rw', uri=True)
     try:
+        if _case_boundary(root) != identity:
+            raise UserError('Case path changed while opening its database.')
+        try:
+            stored = db.execute("SELECT value FROM meta WHERE key='case_id' LIMIT 2").fetchall()
+        except sqlite3.Error as exc:
+            raise UserError('Case database has no readable case identity.') from exc
+        if len(stored) != 1 or stored[0][0] != case:
+            raise UserError('Case database identity does not match the selected case.')
+        if _case_boundary(root) != identity:
+            raise UserError('Case path changed while checking its database identity.')
+        db.row_factory = sqlite3.Row
+        db.execute("PRAGMA foreign_keys=ON")
         yield root, db
         db.commit()
     except BaseException:

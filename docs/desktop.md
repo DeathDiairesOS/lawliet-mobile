@@ -9,6 +9,23 @@ This is a preview while operating-system qualification continues. The shared
 interface is not yet feature-identical to Swift. Platform-specific tool support
 is separate from desktop rendering support.
 
+## Validation status
+
+The installed native window passed the synthetic case-to-report flow on all three
+hosts in [run 39189164432](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39189164432).
+This establishes the desktop workflow; it does not establish identical forensic
+tool coverage or physical phone acquisition on every OS.
+
+| Host | Native desktop workflow | Backend qualification | Restricted agent collection endpoint |
+| --- | --- | --- | --- |
+| macOS | Passed, system WebKit | Required CLI checks and Apple Silicon installation pass | macOS only; separate qualified Mulder setup |
+| Windows | Passed, WebView2 | Broader regression fixes are still being qualified | Unavailable on this host |
+| Linux | Passed, Qt under Xvfb | Required CLI checks pass | Unavailable on this host |
+
+The native smoke tests use the same Python backend as the CLI. Optional upstream
+parsers, local device drivers, USB interactions and provider configuration still
+need their own checks. No customer data is included in CI.
+
 ## Install from the reviewed repository
 
 Use Python 3.11–3.13 for the desktop dependency environment. The backend separately

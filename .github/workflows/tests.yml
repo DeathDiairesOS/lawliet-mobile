@@ -2,6 +2,7 @@ name: CLI checks
 on: [push, pull_request]
 jobs:
   test:
+    timeout-minutes: 20
     # Windows portability remains experimental; retain visible diagnostics.
     continue-on-error: ${{ matrix.os == 'windows-latest' }}
     env:
@@ -27,7 +28,20 @@ jobs:
         run: python -m unittest tests.test_runner_windows tests.test_windows_file_boundaries tests.test_mulder_runtime tests.test_mulder -v
       - name: Run standard-library tests
         if: ${{ !cancelled() }}
-        run: python -m unittest discover -s tests -v
+        shell: python
+        run: |
+          import faulthandler
+          import os
+          import sys
+          import unittest
+          sys.path.insert(0, os.getcwd())
+          faulthandler.enable()
+          faulthandler.dump_traceback_later(180, repeat=True)
+          try:
+              result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.discover('tests'))
+          finally:
+              faulthandler.cancel_dump_traceback_later()
+          raise SystemExit(0 if result.wasSuccessful() else 1)
       - name: Exercise the CLI
         run: python -m lawliet_mobile demo --workspace demo-output --json
       - name: Verify demo evidence

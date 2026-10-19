@@ -121,6 +121,22 @@ class WindowsRunnerTests(unittest.TestCase):
             finally:
                 os.close(alive)
 
+    def test_hidden_desktop_worker_from_pythonw_has_no_console(self):
+        from lawliet_mobile import runner_windows
+        console = Path(sys.executable)
+        pythonw = console.with_name('pythonw.exe')
+        self.assertTrue(pythonw.is_file(), 'Windows Python installation must include its GUI interpreter')
+        output = self.base / 'hidden-worker.log'
+        with output.open('wb') as stream, patch.object(sys, 'executable', str(pythonw)):
+            child, alive = runner_windows.spawn([str(console), '-c',
+                'import ctypes; print(int(bool(ctypes.windll.kernel32.GetConsoleWindow())))'],
+                cwd=self.base, stdout=stream, stderr=stream, hide_console=True)
+            try:
+                self.assertEqual(child.wait(timeout=15), 0)
+            finally:
+                os.close(alive)
+        self.assertEqual(output.read_text().strip(), '0')
+
     def test_status_probe_cannot_terminate_a_running_process(self):
         from lawliet_mobile.runner_windows import process_running
         from lawliet_mobile.mulder_engine import MulderEngine, atomic_json

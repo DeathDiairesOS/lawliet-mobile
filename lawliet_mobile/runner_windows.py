@@ -132,7 +132,7 @@ def _close_job_when_released(api, job, descriptor):
         api.CloseHandle(job)
 
 
-def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None, env=None):
+def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None, env=None, hide_console=False):
     import msvcrt
     # Duplicate inherited handles rather than temporarily making the owner's
     # live descriptor inheritable across unrelated concurrent process launches.
@@ -150,13 +150,20 @@ def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None, env=None):
                 os.set_handle_inheritable(msvcrt.get_osfhandle(duplicate), True)
                 handles[name] = msvcrt.get_osfhandle(duplicate)
         config = json.dumps({'argv': argv, 'cwd': str(cwd) if cwd else None,
+                             'hide_console': hide_console,
                              'lease_handle': handles.get('lease'), 'stdin_handle': handles.get('stdin')}).encode()
         if len(config) > 16384:
             raise ValueError('Guardian launch configuration exceeds bound.')
+        interpreter = Path(sys.executable)
+        if hide_console and interpreter.name.lower() == 'pythonw.exe':
+            interpreter = interpreter.with_name('python.exe')
+            if not interpreter.is_file():
+                raise RuntimeError('The desktop environment is missing its Python worker interpreter.')
         child = subprocess.Popen(
-            [sys.executable, str(Path(__file__).resolve()), '--guardian', str(handles['configuration'])],
+            [str(interpreter), str(Path(__file__).resolve()), '--guardian', str(handles['configuration'])],
             stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, close_fds=True,
-            startupinfo=_startup(list(handles.values())), env=env)
+            startupinfo=_startup(list(handles.values())), env=env,
+            creationflags=subprocess.CREATE_NO_WINDOW if hide_console else 0)
         # Popen retains the original process HANDLE: no PID lookup/reuse window.
         if not api.AssignProcessToJobObject(job, int(child._handle)):
             raise ctypes.WinError(ctypes.get_last_error())
@@ -216,7 +223,8 @@ def guardian(configuration_handle):
     try:
         child = subprocess.Popen(config['argv'], cwd=config['cwd'], close_fds=True,
             stdin=stdin_fd if stdin_fd is not None else subprocess.DEVNULL,
-            startupinfo=_startup([lease_handle] if lease_handle is not None else []))
+            startupinfo=_startup([lease_handle] if lease_handle is not None else []),
+            creationflags=subprocess.CREATE_NO_WINDOW if config.get('hide_console') else 0)
         return child.wait()
     finally:
         if stdin_fd is not None:

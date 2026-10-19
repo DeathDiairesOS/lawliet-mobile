@@ -137,6 +137,7 @@ class DesktopBridge:
         self._lock = threading.RLock()
         self._mutations = set()
         self._processes = set()
+        self._windows_alive = {}
         self._grants = set()
         self._closed = False
         self._smoke_fixture = smoke_fixture
@@ -148,6 +149,16 @@ class DesktopBridge:
         self._window = window
 
     def _stop(self, process):
+        if os.name == 'nt':
+            # Release the entire request's Job Object even after the guardian
+            # exits normally: a capability probe may have left descendants.
+            # Close/timeout/finally can race; exactly one owns the descriptor.
+            with self._lock:
+                alive = self._windows_alive.pop(process, None)
+            if alive is not None:
+                from .runner_lease import stop
+                stop(process, alive)
+            return
         if process.poll() is not None:
             return
         try:
@@ -189,12 +200,29 @@ class DesktopBridge:
             interpreter = interpreter.with_name('python.exe')
             if not interpreter.is_file():
                 raise UserError('This desktop environment is missing its Python worker interpreter.')
-        process = subprocess.Popen([str(interpreter), '-B', '-m', 'lawliet_mobile.desktop', '--worker'],
-            stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            env=env, start_new_session=(os.name=='posix'),
-            creationflags=subprocess.CREATE_NO_WINDOW if os.name=='nt' else 0)
+        argv = [str(interpreter), '-B', '-m', 'lawliet_mobile.desktop', '--worker']
+        alive = None
+        if os.name == 'nt':
+            from .runner_windows import spawn
+            read_fd, write_fd = os.pipe()
+            try:
+                process, alive = spawn(argv, cwd=None, stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE, stdin_fd=read_fd, env=env, hide_console=True)
+            except BaseException:
+                os.close(write_fd)
+                raise
+            finally:
+                os.close(read_fd)
+            input_stream = os.fdopen(write_fd, 'wb')
+        else:
+            process = subprocess.Popen(argv, stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=env, start_new_session=(os.name=='posix'))
+            input_stream = process.stdin
         with self._lock:
             self._processes.add(process)
+            if alive is not None:
+                self._windows_alive[process] = alive
             closed = self._closed
         captured = bytearray()
         overflow = threading.Event()
@@ -214,13 +242,15 @@ class DesktopBridge:
         try:
             if closed:
                 raise UserError('The desktop is closing.')
-            process.stdin.write(raw); process.stdin.close()
+            input_stream.write(raw); input_stream.close()
             deadline = time.monotonic()+self._timeout
             while process.poll() is None:
                 if overflow.is_set() or time.monotonic() > deadline or self._closed:
                     self._stop(process)
                     raise UserError('Operation stopped or exceeded its limit. Inspect retained case history before retrying.')
                 time.sleep(.05)
+            if os.name == 'nt':
+                self._stop(process)
             for thread in readers: thread.join(timeout=5)
             if overflow.is_set() or any(thread.is_alive() for thread in readers):
                 raise UserError('Backend response exceeded its limit or did not finish.')
@@ -234,7 +264,7 @@ class DesktopBridge:
             raise UserError('Backend returned an incomplete response. Inspect case history.') from error
         finally:
             self._stop(process)
-            if process.stdin and not process.stdin.closed: process.stdin.close()
+            if input_stream and not input_stream.closed: input_stream.close()
             with self._lock: self._processes.discard(process)
 
     def request(self, request):

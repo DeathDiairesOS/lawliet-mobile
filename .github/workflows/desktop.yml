@@ -90,7 +90,7 @@ jobs:
           if 'not found' in result.stdout:
               raise SystemExit('Qt xcb plugin has unresolved runtime dependencies')
       - name: Check the desktop bridge and evidence boundaries
-        run: python -m unittest tests.test_desktop tests.test_desktop_bridge -v
+        run: python -m unittest tests.test_desktop tests.test_desktop_bridge tests.test_desktop_bridge_windows -v
       - name: Exercise the installed native application with synthetic evidence
         shell: python
         run: |
