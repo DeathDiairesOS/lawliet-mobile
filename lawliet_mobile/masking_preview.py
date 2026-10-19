@@ -155,7 +155,7 @@ def create(root,db,draft_id,literals):
         if any(v in name or v in data for v in literals for name,data in payloads.items()):
             raise UserError('Selected literals overlap retained preview metadata; no preview produced.')
         for name,data in payloads.items():
-            with (created/name).open('x',encoding='utf-8') as stream:stream.write(data)
+            with (created/name).open('x',encoding='utf-8',newline='\n') as stream:stream.write(data)
         _,_,after_manifest_sha=_preflight(root,db,draft_id)
         if after_manifest_sha!=source_manifest_sha or digest(source_report)!=source_report_sha:
             raise UserError('Source draft changed during preview creation.')

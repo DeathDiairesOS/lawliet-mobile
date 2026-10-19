@@ -4,13 +4,14 @@ import os
 import selectors
 import shutil
 import signal
+import stat
 import subprocess
 import sys
 import time
 from pathlib import Path
 
 from .core import UserError, audit, connect, digest, now
-from .mulder_engine import VERSION, atomic_json, environment, job_path, read_json
+from .mulder_engine import VERSION, atomic_json, engine_command, environment, job_path, read_json
 
 
 def stage(root, db, path, config):
@@ -49,7 +50,92 @@ def stage(root, db, path, config):
     return evidence, manifest
 
 
-def monitor(argv, cwd, env, path, timeout, max_bytes):
+def _windows_monitor(argv, cwd, env, path, timeout, max_bytes, owner_fd):
+    import queue
+    import threading
+    from .runner_windows import spawn
+    from .runner_lease import stop
+    process, alive = spawn(argv, cwd=cwd, env=env, stdout=subprocess.PIPE,
+                           stderr=subprocess.STDOUT, lease_fd=owner_fd)
+    chunks = queue.Queue(maxsize=4)
+    def read_output():
+        try:
+            while True:
+                chunk = process.stdout.read(65536)
+                if not chunk:
+                    break
+                chunks.put(chunk)
+        except OSError:
+            chunks.put(False)
+        finally:
+            chunks.put(None)
+    reader = threading.Thread(target=read_output, daemon=True, name='lawliet-engine-log')
+    reader.start()
+    secrets = [env[k].encode() for k in ('ANTHROPIC_API_KEY',) if env.get(k)]
+    retain = max([len(s) for s in secrets] + [1])-1
+    pending = b''
+    deadline = time.monotonic()+timeout
+    reason = None
+    last_size_check = 0
+    read_done = False
+    try:
+        with (path/'process.log').open('wb') as out:
+            while True:
+                if (path/'cancel').exists():
+                    reason = 'cancelled'
+                if time.monotonic() > deadline:
+                    reason = 'timeout'
+                if time.monotonic()-last_size_check > 2:
+                    last_size_check = time.monotonic()
+                    total = sum(p.stat().st_size for folder in ('outputs', 'work') for p in (path/folder).rglob('*') if p.is_file() and not p.is_symlink())
+                    if total > max_bytes or shutil.disk_usage(path).free < 256*1024**2:
+                        reason = 'storage_limit'
+                if reason and alive is not None:
+                    stop(process, alive)
+                    alive = None
+                elif process.poll() is not None and alive is not None:
+                    # Descendants may retain stdout after the main tool exits.
+                    os.close(alive)
+                    alive = None
+                if read_done:
+                    if process.poll() is not None:
+                        break
+                    time.sleep(.1)
+                    continue
+                try:
+                    chunk = chunks.get(timeout=.1)
+                except queue.Empty:
+                    continue
+                if chunk is False:
+                    raise UserError('Investigation process output could not be read.')
+                if chunk is not None:
+                    pending += chunk
+                for secret in secrets:
+                    pending = pending.replace(secret, b'[REDACTED]')
+                count = len(pending) if chunk is None else max(0, len(pending)-retain)
+                if out.tell() < 16*1024**2:
+                    out.write(pending[:count][:16*1024**2-out.tell()]); out.flush()
+                pending = pending[count:]
+                if chunk is None:
+                    read_done = True
+            return process.wait(timeout=10), reason
+    finally:
+        if alive is not None:
+            stop(process, alive)
+        # Unblock a bounded reader queue after an exceptional monitor exit.
+        end = time.monotonic()+5
+        while reader.is_alive() and time.monotonic() < end:
+            try:
+                chunks.get(timeout=.1)
+            except queue.Empty:
+                pass
+        reader.join(timeout=.1)
+        process.stdout.close()
+
+
+def monitor(argv, cwd, env, path, timeout, max_bytes, owner_fd=None):
+    if os.name == 'nt':
+        return _windows_monitor(argv, cwd, env, path, timeout, max_bytes, owner_fd)
     process = subprocess.Popen(argv, cwd=cwd, env=env, stdin=subprocess.DEVNULL,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, start_new_session=True)
     secrets = [env[k].encode() for k in ('ANTHROPIC_API_KEY',) if env.get(k)]
@@ -105,8 +191,35 @@ def monitor(argv, cwd, env, path, timeout, max_bytes):
     return code, reason
 
 
+def _worker_lock(path):
+    try:
+        if os.name == 'nt':
+            from .runner_windows import open_lease
+            fd = open_lease(path)
+        else:
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    except BlockingIOError as exc:
+        raise UserError('Another investigation is already running in this workspace.') from exc
+    try:
+        info = os.fstat(fd)
+        current = path.lstat()
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or getattr(current, 'st_file_attributes', 0) & 0x400
+                or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino)):
+            raise UserError('Investigation worker lock identity is unsafe.')
+        if os.name == 'posix':
+            import fcntl
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError as exc:
+                raise UserError('Another investigation is already running in this workspace.') from exc
+        return fd
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def run(workspace, case, jid):
-    import fcntl
     from .mulder_results import ingest
     with connect(workspace, case) as (root, _):
         path = job_path(root, jid)
@@ -114,10 +227,9 @@ def run(workspace, case, jid):
     config = read_json(path / 'config.json')
     state.update(worker_pid=os.getpid(), status='preparing', started_at=now())
     atomic_json(path / 'status.json', state)
-    lock = (Path(workspace) / '.engine-worker.lock').open('a')
+    lock = None
     try:
-        try: fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError: raise UserError('Another investigation is already running in this workspace.')
+        lock = _worker_lock(Path(workspace)/'.engine-worker.lock')
         if digest(config['executable']) != config['executable_sha256']:
             raise UserError('Mulder executable changed since availability check.')
         with connect(workspace, case) as (_, db):
@@ -126,15 +238,15 @@ def run(workspace, case, jid):
                                         'briefing_sha256': digest(evidence / 'MULDER.md')})
         outputs, work = path / 'outputs', path / 'work'
         outputs.mkdir();work.mkdir()
-        argv = [config['executable'], 'investigate', str(evidence), jid, '--db-dir', str(outputs),
+        argv = engine_command(config['executable'], 'investigate', str(evidence), jid, '--db-dir', str(outputs),
                 '--cwd', str(work), '--workers', str(config['workers']), '--max-compactions', '0',
                 '--model', config['model'], '--planner-model', config['model'],
-                '--executor-model', config['model'], '--analyst-model', config['model']]
+                '--executor-model', config['model'], '--analyst-model', config['model'])
         atomic_json(path / 'command.json', {'argv': argv, 'version': VERSION})
         env = environment(config)
         env['PATH'] = str(Path(config['executable']).parent) + os.pathsep + env.get('PATH', '')
         state.update(status='running');atomic_json(path / 'status.json', state)
-        code, reason = monitor(argv, work, env, path, config['timeout'], config['max_output_gib']*1024**3)
+        code, reason = monitor(argv, work, env, path, config['timeout'], config['max_output_gib']*1024**3, owner_fd=lock)
         state.update(returncode=code, termination_reason=reason, status='importing')
         atomic_json(path / 'status.json', state)
         integrity = all(digest(root / 'evidence' / config['evidence_id'] / item['path']) == item['sha256'] for item in manifest)
@@ -170,7 +282,8 @@ def run(workspace, case, jid):
                 audit(db, 'engine.failed', {'run_id': jid, 'error': state['error']})
         except Exception: pass
     finally:
-        lock.close()
+        if lock is not None:
+            os.close(lock)
         state['finished_at'] = now()
         atomic_json(path / 'status.json', state)
 

@@ -64,38 +64,52 @@ def _read(path, maximum=65536):
 def _run(argv, *, env=None, cwd=None, timeout=30, maximum=2*1024*1024):
     """Bound output and lifetime; retain no subprocess logs or credentials."""
     with tempfile.TemporaryFile() as stdout, tempfile.TemporaryFile() as stderr:
+        alive = None
         try:
-            child = subprocess.Popen(list(map(str, argv)), stdin=subprocess.DEVNULL,
-                stdout=stdout, stderr=stderr, env=env, cwd=cwd, start_new_session=os.name == 'posix')
+            if os.name == 'nt':
+                from .runner_windows import spawn
+                child, alive = spawn(list(map(str, argv)), stdout=stdout, stderr=stderr, env=env, cwd=cwd)
+            else:
+                child = subprocess.Popen(list(map(str, argv)), stdin=subprocess.DEVNULL,
+                    stdout=stdout, stderr=stderr, env=env, cwd=cwd, start_new_session=os.name == 'posix')
         except OSError as exc:
             raise RuntimeQualificationError('Qualification executable unavailable: ' + str(argv[0])) from exc
-        deadline = time.monotonic() + timeout
-        reason = None
-        while child.poll() is None:
-            if time.monotonic() >= deadline:
-                reason = 'Qualification process timed out'
-            elif os.fstat(stdout.fileno()).st_size > maximum or os.fstat(stderr.fileno()).st_size > maximum:
-                reason = 'Qualification process exceeded its output bound'
-            if reason:
-                if os.name == 'posix':
-                    try: os.killpg(child.pid, signal.SIGKILL)
-                    except ProcessLookupError: pass
-                else: child.kill()
-                child.wait()
-                raise RuntimeQualificationError(reason)
-            time.sleep(0.02)
-        stdout.seek(0); data = stdout.read(maximum + 1)
-        if len(data) > maximum or os.fstat(stderr.fileno()).st_size > maximum:
-            raise RuntimeQualificationError('Qualification process exceeded its output bound')
-        if child.returncode:
-            # Probe failures can name a missing dependency without emitting arbitrary
-            # environment values, source content or exception tracebacks.
-            try: error = json.loads(data).get('qualification_error')
-            except (ValueError, AttributeError): error = None
-            if not isinstance(error, str) or len(error) > 300:
-                error = 'Qualification subprocess failed (exit ' + str(child.returncode) + ')'
-            raise RuntimeQualificationError(error)
-        return data
+        try:
+            deadline = time.monotonic() + timeout
+            reason = None
+            while child.poll() is None:
+                if time.monotonic() >= deadline:
+                    reason = 'Qualification process timed out'
+                elif os.fstat(stdout.fileno()).st_size > maximum or os.fstat(stderr.fileno()).st_size > maximum:
+                    reason = 'Qualification process exceeded its output bound'
+                if reason:
+                    if alive is not None:
+                        from .runner_lease import stop
+                        stop(child, alive)
+                        alive = None
+                    elif os.name == 'posix':
+                        try: os.killpg(child.pid, signal.SIGKILL)
+                        except ProcessLookupError: pass
+                    else:
+                        child.kill()
+                    child.wait()
+                    raise RuntimeQualificationError(reason)
+                time.sleep(0.02)
+            stdout.seek(0); data = stdout.read(maximum + 1)
+            if len(data) > maximum or os.fstat(stderr.fileno()).st_size > maximum:
+                raise RuntimeQualificationError('Qualification process exceeded its output bound')
+            if child.returncode:
+                # Probe failures can name a missing dependency without emitting arbitrary
+                # environment values, source content or exception tracebacks.
+                try: error = json.loads(data).get('qualification_error')
+                except (ValueError, AttributeError): error = None
+                if not isinstance(error, str) or len(error) > 300:
+                    error = 'Qualification subprocess failed (exit ' + str(child.returncode) + ')'
+                raise RuntimeQualificationError(error)
+            return data
+        finally:
+            if alive is not None:
+                os.close(alive)
 
 
 def resolve_launcher(launcher):
@@ -117,14 +131,14 @@ def resolve_launcher(launcher):
         raw = _read(resolved); pins[str(resolved)] = _sha(raw)
         return raw.decode('utf-8')
     script = content(requested)
-    if script.startswith('#!/bin/sh\n'):
+    if script.splitlines()[:1] == ['#!/bin/sh']:
         lines = [line.strip() for line in script.splitlines()[1:] if line.strip() and not line.lstrip().startswith('#')]
         if not lines or not lines[-1].startswith('exec ') or not lines[-1].endswith(' "$@"'):
             raise RuntimeQualificationError('Unsupported Mulder shell launcher; expected a literal exec wrapper')
         for line in lines[:-1]:
             if line == 'set -eu':
                 continue
-            if not line.startswith('export ') or any(c in line for c in ('$', '`', '\\')):
+            if not line.startswith('export ') or any(c in line for c in ('$', '`')):
                 raise RuntimeQualificationError('Unsupported Mulder launcher expansion or command')
             lexer = shlex.shlex(line[7:], posix=True, punctuation_chars=';&|<>()')
             lexer.whitespace_split = True; lexer.commenters = ''
@@ -158,7 +172,7 @@ def resolve_launcher(launcher):
         raise RuntimeQualificationError('Mulder Python interpreter is unavailable')
     targets[str(python)] = str(python.resolve(strict=True))
     if 'PYTHONPYCACHEPREFIX' in env:
-        if env['PYTHONPYCACHEPREFIX'] != '/dev/null/lawliet-source-only' or not stat.S_ISCHR(os.stat('/dev/null').st_mode):
+        if os.name != 'posix' or env['PYTHONPYCACHEPREFIX'] != '/dev/null/lawliet-source-only' or not stat.S_ISCHR(os.stat('/dev/null').st_mode):
             raise RuntimeQualificationError('Unsupported Mulder bytecode-cache location')
     env['PYTHONDONTWRITEBYTECODE'] = '1'
     result = {'launcher': str(requested), 'python': str(python), 'environment': env,
@@ -189,9 +203,11 @@ def _known_cli_code(value):
 
 def _console_python(script):
     lines = script.splitlines()
-    if not lines or not lines[0].startswith('#!/'):
+    if not lines or not lines[0].startswith('#!'):
         raise RuntimeQualificationError('Unsupported Mulder console entrypoint')
     python = Path(lines[0][2:])
+    if not python.is_absolute():
+        raise RuntimeQualificationError('Unsupported Mulder console interpreter path')
     try: parsed = ast.dump(ast.parse('\n'.join(lines[1:])))
     except SyntaxError as exc:
         raise RuntimeQualificationError('Unsupported Mulder console entrypoint') from exc

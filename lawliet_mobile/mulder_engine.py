@@ -85,6 +85,26 @@ def environment(config):
     return env
 
 
+def engine_command(executable, *args):
+    """Native executable or explicit Python script, always without a shell."""
+    executable = Path(executable)
+    if os.name == 'nt':
+        with executable.open('rb') as stream:
+            first = stream.readline(4097)
+        if first.startswith(b'#!'):
+            try:
+                interpreter = Path(first[2:].strip().decode('utf-8'))
+            except (UnicodeError, ValueError) as exc:
+                raise UserError('Unsupported Windows engine script interpreter.') from exc
+            if (len(first) > 4096 or not interpreter.is_absolute() or not interpreter.is_file()
+                    or not re.fullmatch(r'python(?:w|\d+(?:\.\d+)*)?\.exe', interpreter.name, re.I)):
+                raise UserError('Windows engine scripts require an explicit absolute Python executable shebang.')
+            return [str(interpreter), str(executable), *args]
+        if not first.startswith(b'MZ'):
+            raise UserError('Windows engine must be a native executable or an explicit Python script; shell wrappers are unsupported.')
+    return [str(executable), *args]
+
+
 class MulderEngine:
     def __init__(self, workspace, case):
         self.workspace = Path(workspace).expanduser().resolve()
@@ -102,8 +122,8 @@ class MulderEngine:
         requested = config.get('executable') or shutil.which('mulder')
         result = {**self.get_capabilities(), 'available': False, 'ready': False, 'errors': [],
                   'dependencies': {name: bool(shutil.which(name)) for name in ('yara', 'mvt-android', 'aleapp', 'tsk_recover')}}
-        if os.name != 'posix':
-            result['errors'].append('The external investigation worker currently requires a POSIX host.')
+        if os.name not in ('posix', 'nt'):
+            result['errors'].append('The external investigation worker is unsupported on this host.')
         if not requested:
             result['errors'].append('Mulder is not installed/configured. Install it separately following upstream instructions.')
             return result
@@ -115,7 +135,7 @@ class MulderEngine:
             # Probe outputs are bounded on disk rather than retaining arbitrary stdout.
             import tempfile
             with tempfile.TemporaryFile() as out:
-                probe = subprocess.run([str(executable), '--version'], stdout=out, stderr=subprocess.DEVNULL,
+                probe = subprocess.run(engine_command(executable, '--version'), stdout=out, stderr=subprocess.DEVNULL,
                                        timeout=15, env=environment({}), stdin=subprocess.DEVNULL)
                 out.seek(0); version = out.read(4096).decode('utf-8', errors='replace').strip()
             result['version'] = version
@@ -124,13 +144,13 @@ class MulderEngine:
                 result['errors'].append('Only the reviewed Mulder CLI version 1.5.2 is supported.')
             else:
                 with tempfile.TemporaryFile() as out:
-                    help_probe = subprocess.run([str(executable), 'investigate', '--help'], stdout=out,
+                    help_probe = subprocess.run(engine_command(executable, 'investigate', '--help'), stdout=out,
                                                 stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL,
                                                 timeout=15, env=environment({}))
                     out.seek(0); help_text = out.read(65536).decode('utf-8', errors='replace')
                 if help_probe.returncode or not all(flag in help_text for flag in ('--cwd', '--db-dir', '--workers', '--model', '--max-compactions')):
                     result['errors'].append('Installed investigation CLI does not expose the reviewed interface.')
-                verify_probe = subprocess.run([str(executable), 'setup', '--verify', '--json'],
+                verify_probe = subprocess.run(engine_command(executable, 'setup', '--verify', '--json'),
                                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                               stdin=subprocess.DEVNULL, timeout=30, env=environment({}))
                 result['asset_verification_exit_code'] = verify_probe.returncode
@@ -138,7 +158,7 @@ class MulderEngine:
                     result['errors'].append('Mulder asset verification failed. Run mulder setup --verify separately to inspect missing assets. Lawliet did not install anything.')
             result['executable'] = str(executable)
             result['executable_sha256'] = digest(executable)
-        except (OSError, subprocess.TimeoutExpired):
+        except (OSError, subprocess.TimeoutExpired, UserError):
             result['errors'].append('Mulder version probe failed or timed out.')
         try:
             normalized = configuration(config)
@@ -177,7 +197,8 @@ class MulderEngine:
             with (path / 'worker.log').open('wb') as log:
                 child = subprocess.Popen([sys.executable, '-m', 'lawliet_mobile.engine_worker', str(self.workspace), self.case, jid],
                                  stdin=subprocess.DEVNULL, stdout=log, stderr=log, env=env,
-                                 start_new_session=True, close_fds=True)
+                                 start_new_session=os.name == 'posix', close_fds=True,
+                                 creationflags=(subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP) if os.name == 'nt' else 0)
                 atomic_json(path / 'worker.json', {'pid': child.pid, 'started_at': now()})
                 threading.Thread(target=child.wait, daemon=True).start()
         except OSError as exc:

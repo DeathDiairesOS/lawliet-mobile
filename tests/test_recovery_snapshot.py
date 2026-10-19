@@ -17,7 +17,7 @@ class SnapshotTests(unittest.TestCase):
   self.assertTrue(result['restore_verified'])
   with tarfile.open(result['archive']) as t:
    names=set(t.getnames());self.assertEqual(names,{'manifest.json','source/module.py','validation/acquisition/stream.py','validation/acquisition/source-inventory.json'})
-   self.assertEqual(t.extractfile('source/module.py').read(),b'answer=42\n')
+   self.assertEqual(t.extractfile('source/module.py').read(),(self.source/'module.py').read_bytes())
  def test_destination_inside_source_or_validation_rejected(self):
   for dest in [self.source,self.source/'backup',self.validation/'backup']:
    with self.assertRaisesRegex(ValueError,'outside'):snapshot.create_snapshot(self.source,self.validation,dest)

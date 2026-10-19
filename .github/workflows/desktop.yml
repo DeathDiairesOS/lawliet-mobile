@@ -1,0 +1,138 @@
+name: Native desktop smoke
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  desktop:
+    name: Native window (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            extra: desktop
+            renderer: edgechromium
+          - os: macos-latest
+            extra: desktop
+            renderer: cocoa
+          - os: ubuntu-24.04
+            extra: desktop-qt
+            renderer: qt
+    env:
+      PYTHONUTF8: '1'
+      PYTHONDONTWRITEBYTECODE: '1'
+      LAWLIET_SMOKE_RENDERER: ${{ matrix.renderer }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install Linux display and Qt runtime libraries
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y xvfb xauth libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libnss3 libasound2t64
+      - name: Ensure Windows WebView2 Runtime is available
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          # Edge itself is not the WebView2 Runtime. Use Microsoft's documented
+          # registry detection and signed Evergreen bootstrapper if required.
+          # https://learn.microsoft.com/microsoft-edge/webview2/concepts/distribution
+          $ErrorActionPreference = 'Stop'
+          $keys = @(
+            'HKLM:\SOFTWARE\WOW6432Node\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}',
+            'HKCU:\Software\Microsoft\EdgeUpdate\Clients\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}'
+          )
+          function Get-WebViewVersion {
+            foreach ($key in $keys) {
+              $item = Get-ItemProperty -Path $key -Name pv -ErrorAction SilentlyContinue
+              if ($item.pv -and $item.pv -ne '0.0.0.0') { return $item.pv }
+            }
+          }
+          $version = Get-WebViewVersion
+          if (-not $version) {
+            $installer = Join-Path $env:RUNNER_TEMP 'MicrosoftEdgeWebview2Setup.exe'
+            Invoke-WebRequest 'https://go.microsoft.com/fwlink/p/?LinkId=2124703' -OutFile $installer
+            $signature = Get-AuthenticodeSignature $installer
+            if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notmatch 'O=Microsoft Corporation') {
+              throw 'WebView2 bootstrapper does not have a valid Microsoft signature'
+            }
+            $process = Start-Process -FilePath $installer -ArgumentList '/silent', '/install' -Wait -PassThru
+            if ($process.ExitCode -ne 0) { throw "WebView2 installer exited with $($process.ExitCode)" }
+            $version = Get-WebViewVersion
+            if (-not $version) { throw 'WebView2 Runtime is still unavailable after installation' }
+          }
+          Write-Output "WebView2 Runtime: $version"
+      - name: Install the package with its native desktop extra
+        run: python -m pip install ".[${{ matrix.extra }}]"
+      - name: Check the desktop bridge and evidence boundaries
+        run: python -m unittest tests.test_desktop tests.test_desktop_bridge -v
+      - name: Exercise the installed native application with synthetic evidence
+        shell: python
+        run: |
+          import importlib.metadata
+          import json
+          import os
+          from pathlib import Path
+          import platform
+          import shutil
+          import subprocess
+          import sys
+
+          root = Path(os.environ['RUNNER_TEMP']) / 'lawliet-desktop-smoke'
+          root.mkdir()
+          receipts = root / 'receipts'
+          receipts.mkdir()
+          workspace = root / 'synthetic-cases'
+          result = receipts / 'result.json'
+          log = receipts / 'desktop-smoke.log'
+          renderer = os.environ['LAWLIET_SMOKE_RENDERER']
+          metadata = {
+              'platform': platform.platform(), 'python': sys.version,
+              'renderer': renderer, 'evidence': 'generated synthetic fixture only',
+              'package_versions': {
+                  name: importlib.metadata.version(name)
+                  for name in ('lawliet-mobile', 'pywebview')
+              },
+          }
+          (receipts / 'environment.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
+          executable = shutil.which('lawliet-desktop')
+          if not executable:
+              raise SystemExit('Installed lawliet-desktop entry point was not found')
+          command = [executable, '--workspace', str(workspace), '--smoke-test', str(result), '--renderer', renderer]
+          if sys.platform.startswith('linux'):
+              command = ['xvfb-run', '--auto-servernum', '--server-args=-screen 0 1360x900x24', *command]
+          # A real native window and renderer, with no browser automation, phone,
+          # external model, or privileged container. Run outside the checkout to
+          # verify installed package assets, and wait for Windows GUI entrypoints.
+          with log.open('w', encoding='utf-8') as output:
+              try:
+                  process = subprocess.run(command, cwd=root, stdout=output, stderr=subprocess.STDOUT, timeout=240)
+              except subprocess.TimeoutExpired:
+                  output.write('\nNative desktop process exceeded the 240-second limit.\n')
+                  raise
+          print(log.read_text(encoding='utf-8', errors='replace'))
+          if not result.is_file():
+              raise SystemExit(f'Native application produced no smoke receipt (exit {process.returncode})')
+          outcome = json.loads(result.read_text(encoding='utf-8'))
+          print(json.dumps(outcome, indent=2))
+          if process.returncode != 0 or outcome.get('ok') is not True:
+              raise SystemExit(f'Native application smoke failed (exit {process.returncode})')
+      - name: Retain synthetic smoke receipts and logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-smoke-${{ matrix.os }}
+          # Never upload case folders, imported evidence, user home, or a device.
+          path: ${{ runner.temp }}/lawliet-desktop-smoke/receipts/
+          if-no-files-found: warn
+          retention-days: 14

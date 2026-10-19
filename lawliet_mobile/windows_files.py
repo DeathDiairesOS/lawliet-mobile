@@ -240,17 +240,40 @@ class WindowsDirectory:
         self.check(); component(name)
         if type(replace) is not bool:
             raise ValueError('Replacement policy must be explicit.')
-        encoded = str(self.path / name).encode('utf-16-le')
+        # A simple native name renames within the source handle's directory.
+        # The Win32 wrapper resolves even a relative name through a full path
+        # and reopens the destination directory for writing, conflicting with
+        # the retained handles that protect this directory from replacement.
+        # Keep those protections: never release them or broaden sharing.
+        native = self.c.WinDLL('ntdll', use_last_error=True)
+
+        class Status(self.c.Union):
+            _fields_ = [('status', self.w.LONG), ('pointer', self.w.LPVOID)]
+
+        class IoStatus(self.c.Structure):
+            _fields_ = [('result', Status), ('information', self.c.c_size_t)]
+
+        native.NtSetInformationFile.argtypes = [self.w.HANDLE, self.c.POINTER(IoStatus),
+                                                self.w.LPVOID, self.w.ULONG, self.c.c_int]
+        native.NtSetInformationFile.restype = self.w.LONG
+        native.RtlNtStatusToDosError.argtypes = [self.w.LONG]
+        native.RtlNtStatusToDosError.restype = self.w.ULONG
+        encoded = name.encode('utf-16-le')
         size = self.Rename.name.offset + len(encoded)
         buffer = self.c.create_string_buffer(max(size, self.c.sizeof(self.Rename)))
         info = self.Rename.from_buffer(buffer)
         info.replace = replace; info.root = None; info.length = len(encoded)
         self.c.memmove(self.c.addressof(buffer) + self.Rename.name.offset, encoded, len(encoded))
-        if not self.api.SetFileInformationByHandle(self.crt.get_osfhandle(fd), 3, buffer, size):
-            error = self.c.get_last_error()
+        result = IoStatus()
+        status = native.NtSetInformationFile(self.crt.get_osfhandle(fd), self.c.byref(result),
+                                             buffer, len(buffer), 10)  # FileRenameInformation
+        if status != 0:
+            error = native.RtlNtStatusToDosError(status)
             if error in (80, 183):
                 raise FileExistsError('Choose new export and companion filenames.')
-            raise self._error(self.path / name)
+            failure = self.c.WinError(error)
+            failure.filename = str(self.path / name)
+            raise failure
 
     def delete(self, fd):
         delete = self.w.BOOLEAN(True)

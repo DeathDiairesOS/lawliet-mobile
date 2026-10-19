@@ -483,7 +483,8 @@ def create_redacted_customer_draft(root,db,draft_id,literals):
         redacted['manifest.json']=json.dumps(value,ensure_ascii=False,indent=2)+'\n';_redaction_scan(redacted,literals)
         if sum(len(v.encode('utf-8')) for v in redacted.values())>_REDACT_BYTES:raise UserError('Final package byte budget exceeded.')
         for name,text in redacted.items():
-            with (target/name).open('x',encoding='utf-8') as stream:stream.write(text)
+            # Publish the exact UTF-8 bytes hashed above, including on Windows.
+            with (target/name).open('x',encoding='utf-8',newline='\n') as stream:stream.write(text)
         _,_,final_sha=_preflight(root,db,draft_id)
         if final_sha!=source_sha:raise UserError('Source draft changed while publishing derivative.')
         receipt={'derivative_id':derivative_id,'manifest_sha256':digest(target/'manifest.json'),'source_draft_id':draft_id,'source_manifest_sha256':source_sha,'selection_count':len(literals),'consumed_matches':result['consumed_matches']}

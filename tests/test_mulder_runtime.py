@@ -29,7 +29,8 @@ class RuntimeIdentityTests(unittest.TestCase):
                 (parent/'__init__.py').touch(exist_ok=True)
                 parent = parent.parent
             path.write_text("__version__='1.5.2+lawliet.1'\n" if not parts else "VALUE='baseline'\n")
-        self.git('init'); self.git('config','user.email','fixture@example.invalid');self.git('config','user.name','Synthetic fixture')
+        self.git('init'); self.git('config','core.autocrlf','false')
+        self.git('config','user.email','fixture@example.invalid');self.git('config','user.name','Synthetic fixture')
         self.git('add','.');self.git('commit','-m','synthetic baseline')
         self.commit = self.git('rev-parse','HEAD').decode().strip()
         (self.package/'temporal.py').write_text("VALUE='qualified'\n")
@@ -176,13 +177,18 @@ class RuntimeIdentityTests(unittest.TestCase):
                 runtime.qualify_runtime(alias,self.repository,self.manifest)
 
     def test_source_only_safe_path_cli_form_and_cache_prefix(self):
+        cache = {'PYTHONPYCACHEPREFIX':'/dev/null/lawliet-source-only'} if os.name == 'posix' else {}
         wrapper(self.launcher,[sys.executable,'-B','-P','-c',runtime._CLI_CODE],
-                {'PYTHONPATH':str(self.source/'src'),'PYTHONPYCACHEPREFIX':'/dev/null/lawliet-source-only'})
+                {'PYTHONPATH':str(self.source/'src'), **cache})
         self.assertEqual(self.identity()['version'],'1.5.2+lawliet.1')
         wrapper(self.launcher,[sys.executable,'-B','-P','-c',runtime._CLI_CODE],
                 {'PYTHONPYCACHEPREFIX':str(self.root/'cache')})
         with self.assertRaisesRegex(runtime.RuntimeQualificationError,'bytecode-cache location'):
             runtime.resolve_launcher(self.launcher)
+
+    def test_crlf_wrapper_is_qualified_without_executing_the_shell(self):
+        self.launcher.write_bytes(self.launcher.read_text().replace('\n', '\r\n').encode())
+        self.assertEqual(self.identity()['version'], '1.5.2+lawliet.1')
 
     def test_timestamp_valid_stale_bytecode_does_not_replace_probed_source(self):
         path=self.package/'__init__.py'

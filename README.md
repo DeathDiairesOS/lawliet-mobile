@@ -1,12 +1,18 @@
 # Lawliet Mobile
 
-**Local mobile evidence triage. One CLI. Android and iOS.**
+**Local mobile evidence triage. Desktop review and CLI. Android and iOS.**
 
-Python standard library only. No daemon, database server, container, cloud service,
-or required third-party runtime package. The backend uses Python 3.11+; current
-release checks qualify macOS and Linux. Windows paths remain experimental, with
-known timezone, file-handling and POSIX runner limitations. Windows CI is advisory;
-it is not a supported desktop/setup target. Optional CLI tools extend collection and parsing.
+The core CLI uses the Python standard library. No daemon, database server, container
+or cloud service is required. The backend uses Python 3.11+. The optional shared
+desktop GUI uses pywebview and the platform web renderer; it opens an application
+window, with no browser or local HTTP server. Windows also requires IANA timezone
+data. Optional forensic tools extend collection and parsing.
+
+The established native Swift app and setup script remain macOS-only. A shared
+Windows/macOS/Linux desktop is now available for testing; see
+[desktop installation and capability boundaries](docs/desktop.md). Windows
+backend qualification is still in progress, and Windows CLI CI remains advisory.
+Do not interpret a successful workflow badge as complete Windows qualification.
 
 This is an initial working release with a limited native support matrix. Physical
 collection validation is method-specific; successful collection does not establish

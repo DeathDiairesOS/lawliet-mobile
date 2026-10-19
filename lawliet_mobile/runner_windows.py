@@ -128,7 +128,7 @@ def _close_job_when_released(api, job, descriptor):
         api.CloseHandle(job)
 
 
-def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None):
+def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None, env=None):
     import msvcrt
     # Duplicate inherited handles rather than temporarily making the owner's
     # live descriptor inheritable across unrelated concurrent process launches.
@@ -152,7 +152,7 @@ def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None):
         child = subprocess.Popen(
             [sys.executable, str(Path(__file__).resolve()), '--guardian', str(handles['configuration'])],
             stdin=subprocess.DEVNULL, stdout=stdout, stderr=stderr, close_fds=True,
-            startupinfo=_startup(list(handles.values())))
+            startupinfo=_startup(list(handles.values())), env=env)
         # Popen retains the original process HANDLE: no PID lookup/reuse window.
         if not api.AssignProcessToJobObject(job, int(child._handle)):
             raise ctypes.WinError(ctypes.get_last_error())

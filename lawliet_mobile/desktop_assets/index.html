@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <!-- LAWLIET_CSP -->
+  <title>LAWLIET</title>
+  <style>/* LAWLIET_CSS */</style>
+</head>
+<body>
+  <a class="skip-link" href="#view">Skip to case content</a>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Case navigation">
+      <div class="brand"><img class="brand-mark" src="<!-- LAWLIET_LOGO -->" alt=""><div>LAWLIET<small>MOBILE FORENSICS</small></div></div>
+      <button id="cases-nav" class="nav-button" type="button">Cases</button>
+      <div class="nav-label">CURRENT CASE</div>
+      <select id="case-switch" aria-label="Current case"><option value="">Select a case</option></select>
+      <nav id="navigation" aria-label="Investigation views"></nav>
+      <div class="sidebar-bottom"><button id="workspace-button" type="button">Choose workspace…</button><span id="workspace-path" class="muted breakable"></span><span id="platform-note" class="muted"></span></div>
+    </aside>
+    <main>
+      <header class="topbar"><div><p id="breadcrumb" class="eyebrow">LOCAL CASE WORKSPACE</p><h1 id="page-title">Cases</h1></div><div class="row"><span class="local-badge">Local evidence</span><button id="refresh" type="button">Refresh</button></div></header>
+      <div id="notice" role="status" aria-live="polite" hidden></div>
+      <div id="busy-line" role="status" aria-live="polite" hidden><span class="spinner" aria-hidden="true"></span><span id="busy-text">Working…</span></div>
+      <div id="view" tabindex="-1"></div>
+      <footer><span id="footer-status">Connecting to the local backend…</span><span id="footer-case"></span></footer>
+    </main>
+  </div>
+  <div id="modal-host"></div>
+  <script>/* LAWLIET_JS */</script>
+</body>
+</html>

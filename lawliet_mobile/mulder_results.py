@@ -44,7 +44,7 @@ def ingest(root, db, jid, evidence_id, version, upstream_case_id=None):
         if item.is_symlink():
             raise UserError('Mulder output contains an unsafe symbolic link; retained but not imported.')
         if item.is_file():
-            inventory.append({'path': str(item.relative_to(path)), 'sha256': digest(item), 'size': item.stat().st_size})
+            inventory.append({'path': item.relative_to(path).as_posix(), 'sha256': digest(item), 'size': item.stat().st_size})
     atomic_json(path / 'output-manifest.json', inventory)
     hashes = {entry['path']: entry['sha256'] for entry in inventory}
     report = outputs / (upstream_case_id + '.report.md')

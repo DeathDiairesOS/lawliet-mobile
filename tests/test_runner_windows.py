@@ -216,6 +216,43 @@ class WindowsRunnerTests(unittest.TestCase):
         self.assertEqual(len(children), 1)
         self.assertIsNotNone(children[0].poll())
 
+    def test_engine_monitor_masks_split_credentials_and_retains_return_code(self):
+        from lawliet_mobile.engine_worker import monitor
+        secret = 'synthetic-secret-never-export'
+        env = {**os.environ, 'ANTHROPIC_API_KEY':secret}
+        code = ("import os,sys;sys.stdout.buffer.write(b'x'*65530+"
+                "os.environ['ANTHROPIC_API_KEY'].encode()+b'END');raise SystemExit(6)")
+        result, reason = monitor([sys.executable, '-c', code], self.base, env,
+                                  self.base, 15, 1024**2)
+        self.assertEqual((result, reason), (6, None))
+        data = (self.base/'process.log').read_bytes()
+        self.assertNotIn(secret.encode(), data)
+        self.assertIn(b'[REDACTED]END', data)
+
+    def test_engine_monitor_honors_timeout_and_cancel_with_retained_logs(self):
+        from lawliet_mobile.engine_worker import monitor
+        for mode in ('timeout', 'cancelled'):
+            with self.subTest(mode=mode):
+                marker = self.base/'cancel'
+                if mode == 'cancelled':
+                    marker.touch()
+                code, reason = monitor([sys.executable, '-c', 'import time;time.sleep(120)'],
+                    self.base, dict(os.environ), self.base, .5 if mode == 'timeout' else 15, 1024**2)
+                self.assertNotEqual(code, 0)
+                self.assertEqual(reason, mode)
+                self.assertTrue((self.base/'process.log').is_file())
+
+    def test_engine_workspace_lock_is_exclusive(self):
+        from lawliet_mobile.engine_worker import _worker_lock
+        path = self.workspace/'.engine-worker.lock'
+        fd = _worker_lock(path)
+        try:
+            with self.assertRaisesRegex(UserError, 'already running'):
+                _worker_lock(path)
+        finally:
+            os.close(fd)
+        os.close(_worker_lock(path))
+
 
 if __name__ == '__main__':
     if '--parent' in sys.argv:
