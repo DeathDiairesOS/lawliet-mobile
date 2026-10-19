@@ -103,25 +103,35 @@ def _scope(root, db):
 @contextlib.contextmanager
 def _lock(root):
     """Independent, nonblocking workflow lock; nested collectors own runner leases."""
-    if os.name != 'posix':
-        raise UserError('Authorized collection ownership requires a POSIX host.')
-    import fcntl
+    if os.name not in ('posix', 'nt'):
+        raise UserError('Authorized collection ownership is unsupported on this host.')
     path = root / '.agent-collection.lease'
     try:
-        fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+        if os.name == 'nt':
+            from .runner_windows import open_lease
+            fd = open_lease(path)
+        else:
+            fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK, 0o600)
+    except BlockingIOError:
+        yield False
+        return
     except OSError as exc:
         raise UserError('Cannot safely open the collection workflow lock.') from exc
     try:
         info = os.fstat(fd)
         current = path.lstat()
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or getattr(current, 'st_file_attributes', 0) & 0x400 or (info.st_dev, info.st_ino) != (current.st_dev, current.st_ino):
             raise UserError('Collection workflow lock identity is unsafe.')
-        try:
-            fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError:
-            yield False
-        else:
+        if os.name == 'nt':
             yield True
+        else:
+            import fcntl
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            except BlockingIOError:
+                yield False
+            else:
+                yield True
     finally:
         os.close(fd)
 

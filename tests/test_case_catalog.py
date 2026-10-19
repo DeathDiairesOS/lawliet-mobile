@@ -1,3 +1,4 @@
+from contextlib import closing
 """Read-only discovery/history using real synthetic Lawliet case databases."""
 import hashlib
 import importlib.util
@@ -52,7 +53,7 @@ class CaseCatalogTests(unittest.TestCase):
         r=catalog.catalog([str(self.root)],max_depth=0);self.assertEqual(len(r['cases']),0);self.assertTrue(r['partial'])
     def test_metadata_does_not_count_or_read_artifacts(self):
         a=self.case(self.root)
-        with sqlite3.connect(a/'case.sqlite') as db:
+        with closing(sqlite3.connect(a/'case.sqlite')) as db, db:
             db.execute('DROP TABLE artifacts');db.execute("UPDATE meta SET value=? WHERE key='case_management'",('{}',))
         self.assertTrue(catalog.catalog([str(self.root)])['cases'][0]['available'])
     def test_relative_roots_are_not_implicitly_authorized(self):

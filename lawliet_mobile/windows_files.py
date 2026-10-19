@@ -109,9 +109,9 @@ class WindowsDirectory:
                             current.mkdir()
                         except FileExistsError:
                             pass
-                # READ_ATTRIBUTES; share reads only. This excludes concurrent
-                # directory replacement and adding a reparse point in place.
-                handle = self._open(current, 0x80, 1, 3, 0x02000000)
+                # LIST_DIRECTORY | READ_ATTRIBUTES participates in Windows
+                # share-access checks; attribute-only handles do not pin names.
+                handle = self._open(current, 0x81, 1, 3, 0x02000000)
                 try:
                     identity = self.info(handle, directory=True)
                 except BaseException:
@@ -130,7 +130,25 @@ class WindowsDirectory:
             if self.info(handle, directory=True) != identity:
                 raise UserError('Windows output directory changed.')
 
-    def read(self, name, maximum, *, prefix=False):
+    def open_file(self, name, *, write=False, create=False):
+        """Return a validated single-link CRT descriptor; caller closes it.
+
+        Existing bytes are never truncated here. The retained directory scope
+        must remain open until the caller is finished using this descriptor.
+        """
+        component(name); self.check()
+        if create and not write:
+            raise ValueError('Creating a file requires write access.')
+        access = 0xc0000000 if write else 0x80000000
+        handle = self._open(self.path / name, access, 1, 4 if create else 3)
+        try:
+            self.info(handle)
+            return self.crt.open_osfhandle(handle, (os.O_RDWR if write else os.O_RDONLY) | os.O_BINARY)
+        except BaseException:
+            self.api.CloseHandle(handle)
+            raise
+
+    def read(self, name, maximum, *, prefix=False, metadata=False):
         component(name)
         if type(maximum) is not int or maximum < 0:
             raise UserError('Output byte limit must be a nonnegative integer.')
@@ -149,12 +167,50 @@ class WindowsDirectory:
             if before != self.info(handle):
                 raise UserError('Child output changed while reading.')
             self.check()
-            return data
+            return (data, before) if metadata else data
         finally:
             if fd is not None:
                 os.close(fd)
             else:
                 self.api.CloseHandle(handle)
+
+    def fingerprint(self, name, *, maximum=None, deadline=None):
+        """Stream without materializing evidence; retained handle denies edits."""
+        import time
+        fd = self.open_file(name)
+        try:
+            handle = self.crt.get_osfhandle(fd)
+            before = self.info(handle)
+            if maximum is not None and before[4] > maximum:
+                raise UserError('Evidence exceeds its declared byte limit.')
+            digest = hashlib.sha256(); count = 0
+            while True:
+                if deadline is not None and time.monotonic() > deadline:
+                    raise UserError('Evidence fingerprint exceeded its time limit.')
+                block = os.read(fd, 1024 * 1024)
+                if not block:
+                    break
+                count += len(block)
+                if maximum is not None and count > maximum:
+                    raise UserError('Evidence exceeds its declared byte limit.')
+                digest.update(block)
+            if before != self.info(handle) or count != before[4]:
+                raise UserError('Evidence changed during fingerprinting.')
+            self.check()
+            return {'bytes': count, 'sha256': digest.hexdigest()}, before
+        finally:
+            os.close(fd)
+
+    def identity(self, name):
+        fd = self.open_file(name)
+        try:
+            return self.info(self.crt.get_osfhandle(fd))
+        finally:
+            os.close(fd)
+
+    def listing(self):
+        self.check()
+        return os.scandir(self.path)
 
     def new_file(self):
         self.check()
@@ -180,13 +236,15 @@ class WindowsDirectory:
             raise UserError('Export output changed while hashing.')
         return value.hexdigest()
 
-    def rename(self, fd, name):
+    def rename(self, fd, name, *, replace=False):
         self.check(); component(name)
+        if type(replace) is not bool:
+            raise ValueError('Replacement policy must be explicit.')
         encoded = str(self.path / name).encode('utf-16-le')
         size = self.Rename.name.offset + len(encoded)
         buffer = self.c.create_string_buffer(max(size, self.c.sizeof(self.Rename)))
         info = self.Rename.from_buffer(buffer)
-        info.replace = False; info.root = None; info.length = len(encoded)
+        info.replace = replace; info.root = None; info.length = len(encoded)
         self.c.memmove(self.c.addressof(buffer) + self.Rename.name.offset, encoded, len(encoded))
         if not self.api.SetFileInformationByHandle(self.crt.get_osfhandle(fd), 3, buffer, size):
             error = self.c.get_last_error()

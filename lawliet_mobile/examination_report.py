@@ -35,6 +35,16 @@ def _source(root, row, deadline):
             or PurePosixPath(name).is_absolute() or any(x in {'', '.', '..'} for x in name.split('/'))):
         raise UserError('Unsafe examination source mapping.')
     path = Path(root)/'evidence'/eid/name
+    if os.name == 'nt':
+        from .windows_files import WindowsDirectory
+        try:
+            with WindowsDirectory(path.parent) as directory:
+                result, _ = directory.fingerprint(path.name, maximum=row['size'], deadline=deadline)
+                if result['bytes'] != row['size'] or result['sha256'] != row['sha256']:
+                    raise UserError('Examination source integrity mismatch: retained bytes changed.')
+            return
+        except OSError as exc:
+            raise UserError('Examination source is missing or unsafe; reconcile retained evidence.') from exc
     parent = leaf = None
     try:
         parent = _directory(path.parent)

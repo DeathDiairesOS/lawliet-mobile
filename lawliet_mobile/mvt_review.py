@@ -8,7 +8,7 @@ import tempfile
 import uuid
 
 from .core import UserError, add_artifact, audit, begin_run_index, import_evidence, json_text, now
-from .package_verification import _directory, _read
+from .package_verification import _directory, _read, _close_directory
 from .sqlite_container_worker import strict_json
 
 VERSION = '2026.10.5'
@@ -53,7 +53,7 @@ def _read_file(folder, relative, limit=MAX_JSON):
         raise UserError('Cannot safely read retained file: ' + str(relative)) from exc
     finally:
         if fd is not None:
-            os.close(fd)
+            _close_directory(fd)
 
 
 def _decode(raw):
@@ -96,10 +96,10 @@ def _loaded(path):
         fd = None
         try:
             fd = _directory(directory)
-            with os.scandir(fd) as entries:
+            with (os.scandir(fd) if isinstance(fd, int) else fd.listing()) as entries:
                 for entry in entries:
                     count += 1
-                    if count > 2000 or entry.is_symlink():
+                    if count > 2000 or entry.is_symlink() or getattr(entry.stat(follow_symlinks=False), 'st_file_attributes', 0) & 0x400:
                         raise UserError('Unsafe or excessive MVT bundle entries.')
                     name = prefix + entry.name
                     if entry.is_dir(follow_symlinks=False):
@@ -111,7 +111,7 @@ def _loaded(path):
         except OSError as exc:
             raise UserError('MVT bundle cannot be enumerated safely.') from exc
         finally:
-            if fd is not None: os.close(fd)
+            if fd is not None: _close_directory(fd)
     if actual != set(blobs):
         raise UserError('MVT bundle has missing or unlisted files.')
     receipt = _decode(blobs.get(RECEIPT, b''))

@@ -117,6 +117,10 @@ def _safe_name(name):
     parts = PurePosixPath(name)
     if parts.is_absolute() or ".." in parts.parts or (parts.parts and ":" in parts.parts[0]):
         raise UserError(f"Unsafe archive path: {name!r}")
+    if os.name == 'nt':
+        from .windows_files import component
+        for part in parts.parts:
+            component(part)
     return Path(*parts.parts)
 
 

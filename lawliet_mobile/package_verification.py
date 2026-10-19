@@ -39,6 +39,13 @@ def _json(data):
 
 def _directory(path):
     """Anchor every directory component without following symbolic links."""
+    if os.name == 'nt':
+        from .windows_files import WindowsDirectory
+        from .core import UserError
+        try:
+            return WindowsDirectory(Path(path).absolute()).__enter__()
+        except UserError as exc:
+            raise PackageError(str(exc)) from exc
     if not hasattr(os, 'O_NOFOLLOW') or not hasattr(os, 'O_DIRECTORY'):
         raise PackageError('This platform lacks the required no-follow directory API.')
     path = Path(path).absolute()
@@ -57,6 +64,12 @@ def _directory(path):
 
 
 def _read(fd, name):
+    if not isinstance(fd, int):
+        from .core import UserError
+        try:
+            return fd.read(name, MAX_FILE, metadata=True)
+        except UserError as exc:
+            raise PackageError(str(exc)) from exc
     flags = os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK
     file_fd = os.open(name, flags, dir_fd=fd)
     try:
@@ -75,6 +88,22 @@ def _read(fd, name):
         return data, identity(after)
     finally:
         os.close(file_fd)
+
+
+def _close_directory(fd):
+    os.close(fd) if isinstance(fd, int) else fd.close()
+
+
+def _inventory(fd):
+    # Enumeration remains bounded before reading any unlisted member.
+    entries = os.scandir(fd) if isinstance(fd, int) else fd.listing()
+    with entries:
+        names = set()
+        for entry in entries:
+            names.add(entry.name)
+            if len(names) > 7:
+                raise PackageError('Unexpected package inventory.')
+        return names
 
 
 def _cross_document_entries(investigation, annex):
@@ -128,7 +157,7 @@ def verify_package(path, expected_manifest_sha256=None):
         raise PackageError('Expected manifest SHA-256 must be 64 lowercase hexadecimal characters.')
     fd = _directory(path)
     try:
-        inventory = set(os.listdir(fd))
+        inventory = _inventory(fd)
         if len(inventory) > 7:
             raise PackageError('Unexpected package inventory.')
         raw, manifest_identity = _read(fd, 'manifest.json')
@@ -175,7 +204,7 @@ def verify_package(path, expected_manifest_sha256=None):
             if not isinstance(release_receipt, dict) or release_receipt.get('manifest_sha256') != manifest_sha:
                 raise PackageError('Release receipt does not bind this manifest.')
             allowed.add('release-receipt.json')
-        if inventory != allowed or set(os.listdir(fd)) != inventory:
+        if inventory != allowed or _inventory(fd) != inventory:
             raise PackageError('Missing or unexpected package members.')
         annex = _json(payloads['technical-annex.json'])
         if not isinstance(annex, dict) or annex.get('format') != 'ancalor-customer-annex-v1':
@@ -243,8 +272,12 @@ def verify_package(path, expected_manifest_sha256=None):
             if receipt.get('investigation_id') != investigation_id or receipt.get('case_id') != case_id:
                 raise PackageError('Export receipt and investigation identities disagree.')
         for name, identity in identities.items():
-            s = os.stat(name, dir_fd=fd, follow_symlinks=False)
-            if (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns) != identity:
+            if isinstance(fd, int):
+                s = os.stat(name, dir_fd=fd, follow_symlinks=False)
+                current = (s.st_dev, s.st_ino, s.st_size, s.st_mtime_ns, s.st_ctime_ns)
+            else:
+                current = fd.identity(name)
+            if current != identity:
                 raise PackageError('Package changed during verification.')
         return {'ok': True, 'format': manifest['format'], 'manifest_sha256': manifest_sha,
                 'anchor': 'matches_supplied_digest' if expected_manifest_sha256 else 'self_consistency_only',
@@ -258,4 +291,4 @@ def verify_package(path, expected_manifest_sha256=None):
                                'A supplied digest must come through an independently trusted channel.',
                                'Reference paths and URLs were not opened; no network or model was used.']}
     finally:
-        os.close(fd)
+        _close_directory(fd)

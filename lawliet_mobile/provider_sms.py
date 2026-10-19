@@ -103,6 +103,34 @@ def _write_manifest(path, value):
     path = Path(path).absolute()
     if '..' in path.parts:
         raise UserError('Manifest parent traversal refused.')
+    if os.name == 'nt':
+        from .windows_files import WindowsDirectory
+        with WindowsDirectory(path.parent) as parent:
+            try:
+                existing = parent.open_file(path.name)
+            except FileNotFoundError:
+                pass
+            else:
+                os.close(existing)
+            _, fd = parent.new_file()
+            published = False
+            try:
+                remaining = memoryview((json_text(value)+'\n').encode('utf-8'))
+                while remaining:
+                    written = os.write(fd, remaining)
+                    if written <= 0:
+                        raise OSError('Manifest write made no progress.')
+                    remaining = remaining[written:]
+                os.fsync(fd)
+                parent.rename(fd, path.name, replace=True)
+                published = True
+            finally:
+                try:
+                    if not published:
+                        parent.delete(fd)
+                finally:
+                    os.close(fd)
+        return
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     parent = os.open(path.anchor, flags)
     temporary = None

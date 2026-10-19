@@ -1,3 +1,4 @@
+from contextlib import closing
 import copy
 import csv
 import json
@@ -18,7 +19,7 @@ class InvestigatorViewTests(unittest.TestCase):
         self.base=Path(self.temp.name).resolve();self.workspace=self.base/'cases'
         create_case(self.workspace,'case')
         folder=self.base/'phone';folder.mkdir();source=folder/'contacts2.db'
-        with sqlite3.connect(source) as db:
+        with closing(sqlite3.connect(source)) as db, db:
             db.executescript('CREATE TABLE mimetypes(_id INTEGER,mimetype TEXT);CREATE TABLE data(_id INTEGER,raw_contact_id INTEGER,mimetype_id INTEGER,data1 TEXT);INSERT INTO mimetypes VALUES(1,"vnd.android.cursor.item/name"),(2,"vnd.android.cursor.item/phone_v2");')
             for i in range(1,7):
                 db.execute('INSERT INTO data VALUES(?,?,1,?)',(i*2,i,'Shady Wahab' if i==6 else f'Contact {i}'))

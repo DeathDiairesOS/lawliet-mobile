@@ -1,3 +1,4 @@
+from contextlib import closing
 """Synthetic forensic failure-state and export-boundary acceptance checks."""
 import csv
 import hashlib
@@ -20,7 +21,7 @@ def tree_hashes(root):
 
 def sms_database(path, count=2):
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as db:
+    with closing(sqlite3.connect(path)) as db, db:
         db.execute('CREATE TABLE sms(_id INTEGER PRIMARY KEY,address TEXT,body TEXT,date INTEGER,type INTEGER, payload BLOB)')
         db.executemany('INSERT INTO sms VALUES(?,?,?,?,?,?)',
                        ((i, '+12025550100', f'SENTINEL {i}\nUnicode 😀\tquote "', 1700000000000+i, 1, b'\x00\xff') for i in range(count)))
@@ -181,7 +182,7 @@ class RecoverySqliteAcceptanceTests(unittest.TestCase):
             base=Path(tmp);root=base/'backup';root.mkdir()
             for name in ('aabb','ccdd','eeff'):(root/name).write_bytes(b'fixture')
             outside=base/'outside';outside.write_bytes(b'not evidence')
-            with sqlite3.connect(root/'Manifest.db') as db:
+            with closing(sqlite3.connect(root/'Manifest.db')) as db, db:
                 db.execute('CREATE TABLE Files(fileID TEXT,domain TEXT,relativePath TEXT)')
                 db.executemany('INSERT INTO Files VALUES(?,?,?)',[
                     ('aabb','HomeDomain','Library/Safari/History.db'),

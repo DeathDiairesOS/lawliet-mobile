@@ -2,6 +2,7 @@
 import csv
 import html
 import json
+import os
 from collections import Counter
 from pathlib import Path
 
@@ -31,6 +32,21 @@ def paired_output_paths(root, db, destination):
     import sys
     if sys.platform=='darwin' and requested.is_absolute() and len(requested.parts)>1 and requested.parts[1] in {'var','tmp','etc'}:
         requested=Path('/private').joinpath(*requested.parts[1:])
+    if os.name == 'nt':
+        from .windows_files import WindowsDirectory, local_path
+        requested = Path(str(local_path(requested.absolute())))
+        try:
+            if getattr(requested.lstat(), 'st_file_attributes', 0) & 0x400:
+                raise UserError('Export destination must not be a reparse point.')
+        except FileNotFoundError:
+            pass
+        ancestor = requested.parent
+        while not ancestor.exists() and ancestor != ancestor.parent:
+            ancestor = ancestor.parent
+        # Canonicalize legitimate Windows 8.3 aliases only after checking the
+        # existing ancestor chain for junctions/reparse points by handle.
+        with WindowsDirectory(ancestor):
+            requested = requested.resolve()
     if requested.is_symlink():raise UserError('Export destination must not be a symlink.')
     path=safe_output(root,db,requested,create_parent=False)
     # Do not let resolution authorize a different directory through a link.

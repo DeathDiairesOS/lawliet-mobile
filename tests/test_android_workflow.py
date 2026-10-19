@@ -1,3 +1,4 @@
+from contextlib import closing
 import contextlib
 import io
 import json
@@ -244,7 +245,7 @@ class AndroidWorkflowTests(unittest.TestCase):
         (source / 'signal.db').write_bytes(b'not a readable database')
         (source / 'msgstore.db.crypt15').write_bytes(b'encrypted payload')
         sms = source / 'mmssms.db'
-        with sqlite3.connect(sms) as connection:
+        with closing(sqlite3.connect(sms)) as connection, connection:
             connection.executescript("CREATE TABLE sms(_id INTEGER,date INTEGER,address TEXT,body TEXT,type INTEGER);")
             connection.execute('INSERT INTO sms VALUES(1,1791640800000,?,?,1)', ('Élodie', 'Straße invoice'))
         with connect(self.workspace, 'test') as (root, db):

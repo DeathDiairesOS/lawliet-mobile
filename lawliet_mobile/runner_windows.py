@@ -51,6 +51,32 @@ def open_lease(path):
         raise
 
 
+def process_running(pid):
+    """Read process state without Windows' destructive os.kill(pid, 0)."""
+    if type(pid) is not int or pid <= 0:
+        raise ValueError('Process identifier must be a positive integer.')
+    api = _api()
+    api.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    api.OpenProcess.restype = wintypes.HANDLE
+    api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    api.WaitForSingleObject.restype = wintypes.DWORD
+    handle = api.OpenProcess(0x00100000, False, pid)  # SYNCHRONIZE only; no termination right
+    if not handle:
+        error = ctypes.get_last_error()
+        if error == 87:  # ERROR_INVALID_PARAMETER: the PID no longer exists
+            return False
+        raise ctypes.WinError(error)
+    try:
+        state = api.WaitForSingleObject(handle, 0)
+        if state == 0:
+            return False
+        if state == 258:  # WAIT_TIMEOUT: process handle is not signalled
+            return True
+        raise ctypes.WinError(ctypes.get_last_error())
+    finally:
+        api.CloseHandle(handle)
+
+
 def _job():
     class BasicLimits(ctypes.Structure):
         _fields_ = [('PerProcessUserTimeLimit', ctypes.c_longlong),

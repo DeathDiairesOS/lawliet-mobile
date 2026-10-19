@@ -166,6 +166,32 @@ def _command_log_parent(parent, *, create):
 
 
 @contextlib.contextmanager
+def _windows_command_logs(output):
+    from .windows_files import WindowsDirectory
+    paths = (output, output.with_name(output.name+'.stderr'))
+    with WindowsDirectory(output.parent.absolute(), create=True) as directory:
+        files = {}
+        try:
+            for path in paths:
+                files[path.name] = directory.open_file(path.name, write=True, create=True)
+            def check():
+                directory.check()
+                for fd in files.values():
+                    directory.info(directory.crt.get_osfhandle(fd))
+            check()
+            # Both files are proven safe before either existing log is erased.
+            for fd in files.values():
+                os.ftruncate(fd, 0)
+            with contextlib.ExitStack() as streams:
+                stdout = streams.enter_context(os.fdopen(os.dup(files[paths[0].name]), 'wb'))
+                stderr = streams.enter_context(os.fdopen(os.dup(files[paths[1].name]), 'wb'))
+                yield stdout, stderr, check
+        finally:
+            for fd in files.values():
+                os.close(fd)
+
+
+@contextlib.contextmanager
 def _command_logs(output):
     """Hold the selected parent/files across spawn; never reopen by pathname.
 
@@ -173,6 +199,10 @@ def _command_logs(output):
     special files are refused before either log is truncated. This anchors log
     identity, not all child-created files or a privileged host filesystem.
     """
+    if os.name == 'nt':
+        with _windows_command_logs(output) as logs:
+            yield logs
+        return
     paths=(output,output.with_name(output.name+'.stderr'))
     parent_fd=_command_log_parent(output.parent,create=True)
     files={}

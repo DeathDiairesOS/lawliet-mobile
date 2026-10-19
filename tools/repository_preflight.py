@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[1]
 LOCAL_PATH = re.compile(r'/Users/[^/\s]+/|/Volumes/|[A-Za-z]:\\Users\\')
 TOKEN = re.compile(r'(?:sk-(?:proj-)?[A-Za-z0-9_-]{24,}|gh[pousr]_[A-Za-z0-9]{30,}|-----BEGIN (?:RSA |EC |OPENSSH )?PRIVATE KEY-----)')
 # Existing failed-volume guards and their synthetic fixtures are deliberate.
-REVIEWED_PATH_LITERALS = {'desktop/LawlietMobile.swift','desktop/CaseCatalog.swift','desktop/catalog_backend.py','tests/CaseCatalogCheck.swift','tests/test_case_catalog.py','tools/repository_preflight.py'}
+REVIEWED_PATH_LITERALS = {'desktop/LawlietMobile.swift','desktop/CaseCatalog.swift','desktop/catalog_backend.py','lawliet_mobile/case_catalog.py','tests/CaseCatalogCheck.swift','tests/test_case_catalog.py','tools/repository_preflight.py'}
 FORBIDDEN = {'build','dist','work','cases','evidence','runtime','validation','outputs','logs','intake','originals','snapshots','backups','.session-watch','.device-interaction','.venv'}
 
 

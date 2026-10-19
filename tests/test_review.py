@@ -1,3 +1,4 @@
+from contextlib import closing
 import contextlib
 import io
 import json
@@ -19,7 +20,7 @@ class ReviewTests(unittest.TestCase):
         self.workspace = Path(self.tmp.name) / 'cases'
         create_case(self.workspace, 'test')
         self.source = Path(self.tmp.name) / 'messages.db'
-        with sqlite3.connect(self.source) as db:
+        with closing(sqlite3.connect(self.source)) as db, db:
             db.execute('CREATE TABLE sms(_id INTEGER, address TEXT, body TEXT, date INTEGER, type INTEGER)')
             db.executemany('INSERT INTO sms VALUES(?,?,?,?,?)', [(1, '+12025550100', 'first\nline', 1700000000000, 1), (2, '+12025550100', '=FORMULA', 1700000001000, 2)])
         with connect(self.workspace, 'test') as (root, db):

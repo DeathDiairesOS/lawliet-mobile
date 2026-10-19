@@ -192,7 +192,12 @@ class MulderEngine:
         if not pid and (path / 'worker.json').is_file(): pid = read_json(path / 'worker.json').get('pid')
         if state['status'] not in TERMINAL and pid:
             try:
-                os.kill(pid, 0)
+                if os.name == 'nt':
+                    from .runner_windows import process_running
+                    if not process_running(pid):
+                        raise ProcessLookupError()
+                else:
+                    os.kill(pid, 0)
             except ProcessLookupError:
                 state.update(status='interrupted', error='Worker no longer exists. Outputs retained; no automatic retry.')
         state['limitations'] = [LIMITATION]

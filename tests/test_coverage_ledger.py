@@ -1,3 +1,4 @@
+from contextlib import closing
 import json
 import sqlite3
 import tempfile
@@ -20,7 +21,7 @@ class CoverageLedgerTests(unittest.TestCase):
         return {**dict(state=state,source='expected/sms.db',category='messages',reason='Declared bounded scope',actor='Reviewer',profile='work',schema='unknown',input_tier='logical'),**changes}
     def test_supported_sms_does_not_hide_unsupported_mms_table_counts(self):
         source=self.base/'mmssms.db'
-        with sqlite3.connect(source) as fixture:
+        with closing(sqlite3.connect(source)) as fixture, fixture:
             fixture.executescript("CREATE TABLE sms(_id,address,body,date,type); INSERT INTO sms VALUES(1,'+15550123456','visible SMS',1700000000000,1); CREATE TABLE part(_id,ct); INSERT INTO part VALUES(1,'image/jpeg'); CREATE TABLE pdu(_id); INSERT INTO pdu VALUES(1);")
         with connect(self.ws,'A') as (root,db):
             eid=import_evidence(root,db,source,'android')[0];native_analyze(root,db,eid)

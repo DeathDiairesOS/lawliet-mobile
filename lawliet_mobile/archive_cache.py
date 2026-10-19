@@ -22,9 +22,26 @@ def _check_deadline(deadline):
         raise UserError('Archive verification exceeded its 600-second limit.')
 
 
+def _source_identity(path):
+    if os.name == 'nt':
+        from .windows_files import WindowsDirectory
+        path = Path(path).absolute()
+        with WindowsDirectory(path.parent) as parent:
+            return parent.identity(path.name)
+    return _identity(os.stat(path, follow_symlinks=False))
+
+
 def fingerprint(path, *, single_link=False, max_bytes=None, deadline=None, observed=None):
     deadline = time.monotonic() + 600 if deadline is None else deadline
     _check_deadline(deadline)
+    if os.name == 'nt':
+        from .windows_files import WindowsDirectory
+        path = Path(path).absolute()
+        with WindowsDirectory(path.parent) as parent:
+            result, identity = parent.fingerprint(path.name, maximum=max_bytes, deadline=deadline)
+        if observed is not None:
+            observed['identity'] = identity
+        return result
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, 'rb') as stream:
         before = os.fstat(stream.fileno())
@@ -54,7 +71,8 @@ def fingerprint(path, *, single_link=False, max_bytes=None, deadline=None, obser
 def inventory(destination, max_output_bytes, max_files, *, deadline=None):
     deadline = time.monotonic() + 600 if deadline is None else deadline
     destination = Path(destination)
-    if destination.is_symlink() or not destination.is_dir():
+    if (destination.is_symlink() or not destination.is_dir()
+            or getattr(destination.stat(follow_symlinks=False), 'st_file_attributes', 0) & 0x400):
         raise UserError('Archive cache directory is unavailable or linked.')
     entries, total, budget, file_count = [], 0, 0, 0
     identities = {destination: _identity(destination.stat(follow_symlinks=False))}
@@ -72,7 +90,10 @@ def inventory(destination, max_output_bytes, max_files, *, deadline=None):
                 budget += len(relative.encode('utf-8')) + 200
                 if budget > RECEIPT_MAX // 2 or len(entries) >= min(1000000, max_files * 129):
                     raise UserError('Archive cache inventory exceeds its receipt bound.')
-                original = item.stat(follow_symlinks=False)
+                # Windows DirEntry.stat omits volume/file identity; use stat.
+                original = os.stat(item.path, follow_symlinks=False)
+                if getattr(original, 'st_file_attributes', 0) & 0x400:
+                    raise UserError('Archive cache contains a reparse point.')
                 identities[path] = _identity(original)
                 mode = original.st_mode
                 if stat.S_ISDIR(mode):
@@ -103,7 +124,7 @@ def write_completion(destination, archive, source_before, max_output_bytes, max_
     if source_after != source_before:
         raise UserError('Archive changed during extraction; reuse receipt refused.')
     tree = inventory(destination, max_output_bytes, max_files, deadline=deadline)
-    if _identity(os.stat(archive, follow_symlinks=False)) != source_state['identity']:
+    if _source_identity(archive) != source_state['identity']:
         raise UserError('Archive source changed during receipt verification.')
     receipt = {'format': FORMAT, 'archive': str(archive), 'source': source_after,
                'decoder_policy': 'lawliet-bounded-archive-v1',
@@ -118,12 +139,19 @@ def is_complete(destination, archive, max_output_bytes, max_files):
     try:
         deadline = time.monotonic() + 600
         source_state = {}
-        fd = os.open(Path(destination) / MARKER, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
-        with os.fdopen(fd, 'rb') as stream:
-            info = os.fstat(stream.fileno())
-            if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > RECEIPT_MAX:
-                return False
-            receipt = json.loads(stream.read(RECEIPT_MAX + 1))
+        if os.name == 'nt':
+            from .windows_files import WindowsDirectory
+            with WindowsDirectory(Path(destination).absolute()) as parent:
+                raw, marker_identity = parent.read(MARKER, RECEIPT_MAX, metadata=True)
+                receipt = json.loads(raw)
+        else:
+            fd = os.open(Path(destination) / MARKER, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+            with os.fdopen(fd, 'rb') as stream:
+                info = os.fstat(stream.fileno())
+                if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > RECEIPT_MAX:
+                    return False
+                receipt = json.loads(stream.read(RECEIPT_MAX + 1))
+                marker_identity = _identity(info)
         if (not isinstance(receipt, dict) or receipt.get('format') != FORMAT
                 or receipt.get('archive') != str(archive)
                 or receipt.get('decoder_policy') != 'lawliet-bounded-archive-v1'
@@ -132,8 +160,8 @@ def is_complete(destination, archive, max_output_bytes, max_files):
                 or receipt.get('source') != fingerprint(archive, deadline=deadline, observed=source_state)):
             return False
         tree = inventory(destination, max_output_bytes, max_files, deadline=deadline)
-        if (_identity(os.stat(Path(destination)/MARKER, follow_symlinks=False)) != _identity(info)
-                or _identity(os.stat(archive, follow_symlinks=False)) != source_state['identity']):
+        if (_source_identity(Path(destination)/MARKER) != marker_identity
+                or _source_identity(archive) != source_state['identity']):
             return False
         return receipt.get('inventory') == tree and receipt.get('file_count') == sum(e['kind'] == 'file' for e in tree)
     except (OSError, ValueError, TypeError, UserError, RecursionError):

@@ -121,6 +121,22 @@ class WindowsRunnerTests(unittest.TestCase):
             finally:
                 os.close(alive)
 
+    def test_status_probe_cannot_terminate_a_running_process(self):
+        from lawliet_mobile.runner_windows import process_running
+        from lawliet_mobile.mulder_engine import MulderEngine, atomic_json
+        process = subprocess.Popen([sys.executable, '-c', 'import time;time.sleep(120)'])
+        self.addCleanup(lambda: process.poll() is None and (process.kill(), process.wait()))
+        self.assertTrue(process_running(process.pid))
+        job = self.root/'engine-runs'/('a'*32)
+        job.mkdir(parents=True)
+        atomic_json(job/'status.json', {'status':'running', 'worker_pid':process.pid})
+        with patch('os.kill', side_effect=AssertionError('Status must never signal a Windows PID')):
+            state = MulderEngine(self.workspace, 'A').get_status('a'*32)
+        self.assertEqual(state['status'], 'running')
+        self.assertIsNone(process.poll())
+        process.kill(); process.wait(timeout=10)
+        self.assertFalse(process_running(process.pid))
+
     def test_malformed_and_concurrent_lease_refused(self):
         with connect(self.workspace, 'A') as (root, db), runner_lease.lease(root, db):
             with self.assertRaisesRegex(UserError, 'still owns'):
@@ -130,6 +146,75 @@ class WindowsRunnerTests(unittest.TestCase):
         with connect(self.workspace, 'A') as (root, db), self.assertRaisesRegex(UserError, 'malformed'):
             with runner_lease.lease(root, db):
                 pass
+
+    def test_workflow_lock_is_nonblocking_and_independent_of_runner_lease(self):
+        from lawliet_mobile.agent_collection import _lock
+        with connect(self.workspace, 'A') as (root, db), _lock(root) as acquired:
+            self.assertTrue(acquired)
+            with _lock(root) as duplicate:
+                self.assertFalse(duplicate)
+            with runner_lease.lease(root, db):
+                pass
+        with _lock(self.root) as acquired:
+            self.assertTrue(acquired)
+
+    def test_real_execution_preserves_log_identity_and_binary_output(self):
+        from lawliet_mobile.tools import execute
+        output = self.base/'nested'/'stdout'
+        output.parent.mkdir()
+        output.write_bytes(b'OLD LONG CONTENT')
+        stderr = output.with_name(output.name+'.stderr')
+        stderr.write_bytes(b'OLD ERROR CONTENT')
+        identities = (output.stat().st_ino, stderr.stat().st_ino)
+        result = execute([sys.executable, '-c',
+            "import sys;sys.stdout.buffer.write(b'new\\x00');sys.stderr.write('err');raise SystemExit(7)"], output)
+        self.assertEqual(result['returncode'], 7)
+        self.assertEqual(output.read_bytes(), b'new\x00')
+        self.assertEqual(stderr.read_bytes(), b'err')
+        self.assertEqual((output.stat().st_ino, stderr.stat().st_ino), identities)
+
+    def test_log_hardlink_refused_before_other_log_truncated(self):
+        from lawliet_mobile.tools import execute
+        output = self.base/'stdout'
+        output.write_bytes(b'PRESERVE ORIGINAL LOG')
+        canary = self.base/'foreign'
+        canary.write_bytes(b'PRESERVE FOREIGN')
+        os.link(canary, output.with_name(output.name+'.stderr'))
+        with patch.object(runner_lease, 'spawn', side_effect=AssertionError('must not spawn')):
+            with self.assertRaises((UserError, OSError)):
+                execute([sys.executable, '-c', 'pass'], output)
+        self.assertEqual(output.read_bytes(), b'PRESERVE ORIGINAL LOG')
+        self.assertEqual(canary.read_bytes(), b'PRESERVE FOREIGN')
+
+    def test_open_log_files_and_parent_cannot_be_replaced(self):
+        from lawliet_mobile.tools import _command_logs
+        folder = self.base/'logs'
+        folder.mkdir()
+        output = folder/'stdout'
+        with _command_logs(output) as (stdout, stderr, check):
+            with self.assertRaises(OSError):
+                output.unlink()
+            with self.assertRaises(OSError):
+                folder.rename(self.base/'replaced')
+            stdout.write(b'owned')
+            stdout.flush()
+            check()
+        self.assertEqual(output.read_bytes(), b'owned')
+
+    def test_timeout_retains_failure_receipt_and_reaps_guardian(self):
+        from lawliet_mobile.tools import execute
+        original = runner_lease.spawn
+        children = []
+        def capture(*args, **kwargs):
+            result = original(*args, **kwargs)
+            children.append(result[0])
+            return result
+        with patch.object(runner_lease, 'spawn', side_effect=capture):
+            with self.assertRaises(subprocess.TimeoutExpired) as failure:
+                execute([sys.executable, '-c', 'import time;time.sleep(120)'], self.base/'stdout', timeout=.5)
+        self.assertEqual(failure.exception.tool_result['error'], 'timeout')
+        self.assertEqual(len(children), 1)
+        self.assertIsNotNone(children[0].poll())
 
 
 if __name__ == '__main__':

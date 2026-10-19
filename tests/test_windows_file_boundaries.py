@@ -100,6 +100,21 @@ class WindowsFileBoundaries(unittest.TestCase):
         self.assertEqual(b.read_text(), 'foreign')
         self.assertEqual(list(self.root.iterdir()), [b])
 
+    def test_native_handle_rename_refuses_existing_target(self):
+        from lawliet_mobile.windows_files import WindowsDirectory
+        with WindowsDirectory(self.root) as folder:
+            stage, fd = folder.new_file()
+            target = self.root / 'existing'
+            target.write_bytes(b'original')
+            try:
+                os.write(fd, b'derived')
+                with self.assertRaises(FileExistsError):
+                    folder.rename(fd, target.name)
+                self.assertEqual(target.read_bytes(), b'original')
+            finally:
+                folder.delete(fd)
+                os.close(fd)
+
     def test_failure_after_publication_removes_owned_files_by_handle(self):
         path = self.root / 'rows'
         with self.assertRaisesRegex(RuntimeError, 'audit failed'):
@@ -119,3 +134,43 @@ class WindowsFileBoundaries(unittest.TestCase):
             with OutputFiles([self.root / 'Report', self.root / 'REPORT']):
                 pass
         self.assertEqual(path.read_bytes(), b'original')
+
+    def test_generated_manifest_replaces_regular_file_and_refuses_hardlink(self):
+        import json
+        from lawliet_mobile.provider_sms import _write_manifest
+        path = self.root / 'state.json'
+        _write_manifest(path, {'state': 'pending'})
+        _write_manifest(path, {'state': 'complete', 'text': 'café'})
+        self.assertEqual(json.loads(path.read_bytes()), {'state': 'complete', 'text': 'café'})
+        alias = self.root / 'linked.json'; os.link(path, alias)
+        with self.assertRaises((OSError, UserError)):
+            _write_manifest(alias, {'state': 'foreign overwrite'})
+        self.assertEqual(json.loads(path.read_bytes())['state'], 'complete')
+        self.assertEqual({p.name for p in self.root.iterdir()}, {'state.json', 'linked.json'})
+
+    def test_streamed_fingerprint_and_package_read_use_consistent_handle_identity(self):
+        from lawliet_mobile.package_verification import _directory, _read, _close_directory
+        path = self.root / 'payload'; content = b'synthetic' * 140000; path.write_bytes(content)
+        directory = _directory(self.root)
+        try:
+            data, identity = _read(directory, path.name)
+            result, hashed_identity = directory.fingerprint(path.name, maximum=len(content))
+            self.assertEqual(data, content)
+            self.assertEqual(identity, hashed_identity)
+            self.assertEqual(result, {'bytes': len(content), 'sha256': hashlib.sha256(content).hexdigest()})
+            with self.assertRaises(UserError):
+                directory.fingerprint(path.name, maximum=1)
+        finally:
+            _close_directory(directory)
+
+    def test_archive_intake_rejects_windows_stream_device_and_alias_members(self):
+        import zipfile
+        from lawliet_mobile.core import extract_archive
+        for index, name in enumerate(('nested/record:stream', 'nested/NUL.txt', 'nested/trailing.')):
+            archive = self.root / f'bad{index}.zip'
+            with zipfile.ZipFile(archive, 'w') as output:
+                output.writestr(name, b'not an ordinary file')
+            target = self.root / f'decoded{index}'; target.mkdir()
+            with self.subTest(name=name), self.assertRaises(UserError):
+                extract_archive(archive, target)
+            self.assertEqual(list(target.rglob('*')), [])
