@@ -39,7 +39,10 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install --no-install-recommends -y xvfb xauth libegl1 libopengl0 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libnss3 libasound2t64
+          # Qt's xcb diagnostic mentions cursor support even when a different
+          # linked X11 library is missing. Install the complete runtime set.
+          # https://doc.qt.io/qt-6/linux-requirements.html
+          sudo apt-get install --no-install-recommends -y xvfb xauth libegl1 libopengl0 libx11-xcb1 libxcb-cursor0 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-shape0 libxcb-randr0 libxcb-xfixes0 libxcb-sync1 libxcb-shm0 libxi6 libxrender1 libfontconfig1 libsm6 libice6 libnss3 libasound2t64
       - name: Ensure Windows WebView2 Runtime is available
         if: runner.os == 'Windows'
         shell: pwsh
@@ -74,6 +77,18 @@ jobs:
           Write-Output "WebView2 Runtime: $version"
       - name: Install the package with its native desktop extra
         run: python -m pip install ".[${{ matrix.extra }}]"
+      - name: Check installed Linux Qt shared libraries
+        if: runner.os == 'Linux'
+        shell: python
+        run: |
+          from pathlib import Path
+          import subprocess
+          from PyQt6.QtCore import QLibraryInfo
+          plugin = Path(QLibraryInfo.path(QLibraryInfo.LibraryPath.PluginsPath)) / 'platforms' / 'libqxcb.so'
+          result = subprocess.run(['ldd', str(plugin)], capture_output=True, text=True, check=True)
+          print(result.stdout)
+          if 'not found' in result.stdout:
+              raise SystemExit('Qt xcb plugin has unresolved runtime dependencies')
       - name: Check the desktop bridge and evidence boundaries
         run: python -m unittest tests.test_desktop tests.test_desktop_bridge -v
       - name: Exercise the installed native application with synthetic evidence
