@@ -40,6 +40,7 @@ class AndroidBridgeLaunchTests(unittest.TestCase):
         for name in ('','../A','-A','a b','MISSING','LINK'):
             with self.subTest(name=name),self.assertRaises(ValueError):launch(self.runtime,self.store,name)
 
+    @unittest.skipUnless(Path('/usr/bin/sandbox-exec').is_file(),'macOS launcher')
     def test_old_runtime_profile_refused(self):
         self.app.write_text('# old runtime with broad tool surface\n')
         with self.assertRaisesRegex(ValueError,'restricted SMS tool profile'):launch(self.runtime,self.store,'A')
