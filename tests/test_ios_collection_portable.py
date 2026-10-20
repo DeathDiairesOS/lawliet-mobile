@@ -134,9 +134,19 @@ class IOSCollectionPortableTests(unittest.TestCase):
     def test_failed_backup_cannot_overwrite_linked_final_receipt(self):
         sentinel = self.base / 'foreign-receipt'
         sentinel.write_bytes(b'UNCHANGED')
+        blocked = []
         def run(argv, output, *args, **kwargs):
             result = execute(argv, output, *args, **kwargs)
-            os.link(sentinel, output.parent / 'collection.json')
+            receipt = output.parent / 'collection.json'
+            if os.name == 'nt':
+                # A retained Windows directory handle denies the hardlink
+                # creation itself; do not pretend a linked leaf was published.
+                with self.assertRaises(PermissionError):
+                    os.link(sentinel, receipt)
+                self.assertFalse(receipt.exists())
+                blocked.append(True)
+            else:
+                os.link(sentinel, receipt)
             return result
         with connect(self.workspace, 'IOS') as (root, db), patch('lawliet_mobile.tools.execute', side_effect=run):
             with self.assertRaises((UserError, OSError)):
@@ -147,10 +157,33 @@ class IOSCollectionPortableTests(unittest.TestCase):
             terminal = json.loads(db.execute(
                 "SELECT detail FROM audit WHERE action='collection.finished'").fetchone()[0])
             self.assertEqual(terminal['status'], 'failed')
-            self.assertEqual(terminal['collection_status'], 'failed')
-            self.assertEqual(terminal['receipt_status'], 'failed')
             self.assertIsNone(terminal['evidence_id'])
+            if os.name == 'nt':
+                self.assertEqual(blocked, [True])
+                self.assertNotIn('receipt_status', terminal)
+                self.assertIn('ErrorCode 17', terminal['errors'][0]['error'])
+            else:
+                self.assertEqual(terminal['collection_status'], 'failed')
+                self.assertEqual(terminal['receipt_status'], 'failed')
+                self.assertIn('receipt publication failed', terminal['errors'][-1]['error'])
+            self.assertTrue(verify(root, db)['ok'])
+
+    def test_receipt_publication_failure_retains_backup_and_terminal_audit(self):
+        with connect(self.workspace, 'IOS') as (root, db), patch(
+                'lawliet_mobile.provider_sms._write_manifest',
+                side_effect=UserError('Synthetic receipt publication failure')):
+            with self.assertRaisesRegex(UserError, 'Synthetic receipt publication failure'):
+                collect(root, db, self.workspace, 'ios', 'TESTUDID')
+        with connect(self.workspace, 'IOS') as (root, db):
+            terminal = json.loads(db.execute(
+                "SELECT detail FROM audit WHERE action='collection.finished'").fetchone()[0])
+            self.assertEqual(terminal['status'], 'failed')
+            self.assertEqual(terminal['collection_status'], 'complete')
+            self.assertEqual(terminal['receipt_status'], 'failed')
             self.assertIn('receipt publication failed', terminal['errors'][-1]['error'])
+            evidence, = db.execute('SELECT id FROM evidence').fetchall()
+            self.assertEqual(terminal['evidence_id'], evidence['id'])
+            self.assertEqual(native_analyze(root, db, evidence['id'])['new_records'], 1)
             self.assertTrue(verify(root, db)['ok'])
 
     @unittest.skipUnless(os.name == 'nt', 'Native Windows directory ownership')
