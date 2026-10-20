@@ -1,6 +1,7 @@
 import bz2
 import gzip
 import io
+import os
 import stat
 import tarfile
 import tempfile
@@ -103,6 +104,95 @@ class BoundedArchivesTests(unittest.TestCase):
         with self.assertRaises(UserError):
             extract_bounded(source, self.destination)
         self.assertEqual((self.destination / 'existing').read_bytes(), b'old')
+
+    def test_destination_content_added_during_decode_is_preserved(self):
+        source = self.zipped([('a', b'decoded')])
+        original_open = zipfile.ZipFile.open
+        def insert(archive, *args, **kwargs):
+            (self.destination/'foreign').write_bytes(b'PRESERVE FOREIGN')
+            return original_open(archive, *args, **kwargs)
+        with patch.object(zipfile.ZipFile, 'open', insert):
+            with self.assertRaisesRegex(UserError, 'destination changed'):
+                extract_bounded(source, self.destination)
+        self.assertEqual((self.destination/'foreign').read_bytes(), b'PRESERVE FOREIGN')
+        self.assertFalse((self.destination/'a').exists())
+        self.assertFalse(list(self.root.glob('.lawliet-archive-*')))
+
+    @unittest.skipUnless(os.name == 'posix', 'Windows pins the original directory during decoding')
+    def test_replaced_empty_destination_is_detected_before_posix_publication(self):
+        source = self.zipped([('a', b'decoded')])
+        original_open = zipfile.ZipFile.open
+        identities = []
+        def replace(archive, *args, **kwargs):
+            self.destination.rename(self.root/'original')
+            self.destination.mkdir()
+            identities.append(self.destination.stat().st_ino)
+            return original_open(archive, *args, **kwargs)
+        with patch.object(zipfile.ZipFile, 'open', replace):
+            with self.assertRaisesRegex(UserError, 'destination changed'):
+                extract_bounded(source, self.destination)
+        self.assertEqual(self.destination.stat().st_ino, identities[0])
+        self.assertEqual(list(self.destination.iterdir()), [])
+        self.assertTrue((self.root/'original').is_dir())
+
+    @unittest.skipUnless(os.name == 'nt', 'Requires real Windows directory sharing and native rename')
+    def test_windows_original_directory_is_pinned_during_decoding(self):
+        source = self.zipped([('a', b'decoded')])
+        original_open = zipfile.ZipFile.open
+        def replace(archive, *args, **kwargs):
+            with self.assertRaises(OSError):
+                self.destination.rename(self.root/'moved')
+            return original_open(archive, *args, **kwargs)
+        with patch.object(zipfile.ZipFile, 'open', replace):
+            self.assertEqual(extract_bounded(source, self.destination), ['a'])
+        self.assertEqual((self.destination/'a').read_bytes(), b'decoded')
+        self.assertFalse((self.root/'moved').exists())
+
+    @unittest.skipUnless(os.name == 'nt', 'Requires real Windows handle-based restoration')
+    def test_windows_failed_publish_restores_same_original_directory(self):
+        from lawliet_mobile.windows_files import WindowsDirectory
+        source = self.zipped([('a', b'decoded')])
+        original_rename = WindowsDirectory.rename
+        identity = self.destination.stat().st_ino
+        attempted = []
+        def refuse(owner, fd, name, *, replace=False):
+            if name == self.destination.name and not attempted:
+                attempted.append(True)
+                raise OSError('Synthetic publication failure')
+            return original_rename(owner, fd, name, replace=replace)
+        with patch.object(WindowsDirectory, 'rename', refuse):
+            with self.assertRaisesRegex(OSError, 'Synthetic publication failure'):
+                extract_bounded(source, self.destination)
+        self.assertEqual(self.destination.stat().st_ino, identity)
+        self.assertEqual(list(self.destination.iterdir()), [])
+        self.assertFalse(list(self.root.glob('.lawliet-archive-*')))
+
+    @unittest.skipUnless(os.name == 'nt', 'Requires real Windows no-replace directory publication')
+    def test_windows_publication_race_preserves_even_empty_competing_destination(self):
+        from lawliet_mobile.windows_files import WindowsDirectory
+        source = self.zipped([('a', b'decoded')])
+        original_rename = WindowsDirectory.rename
+        for populated in (False, True):
+            with self.subTest(populated=populated):
+                identities = []
+                def race(owner, fd, name, *, replace=False):
+                    result = original_rename(owner, fd, name, replace=replace)
+                    if name.startswith('.lawliet-archive-empty-'):
+                        self.destination.mkdir()
+                        identities.append(self.destination.stat().st_ino)
+                        if populated:
+                            (self.destination/'foreign').write_bytes(b'PRESERVE FOREIGN')
+                    return result
+                with patch.object(WindowsDirectory, 'rename', race):
+                    with self.assertRaises(FileExistsError):
+                        extract_bounded(source, self.destination)
+                self.assertEqual(self.destination.stat().st_ino, identities[0])
+                self.assertFalse((self.destination/'a').exists())
+                if populated:
+                    self.assertEqual((self.destination/'foreign').read_bytes(), b'PRESERVE FOREIGN')
+                    (self.destination/'foreign').unlink()
+                self.assertEqual(list(self.destination.iterdir()), [])
+                self.assertFalse(list(self.root.glob('.lawliet-archive-*')))
 
     def test_invalid_limits_cannot_disable_guard(self):
         source = self.zipped([('a', b'a')])

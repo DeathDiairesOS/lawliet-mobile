@@ -18,7 +18,7 @@ jobs:
         run: python -m unittest tests.test_container_runner tests.test_sqlite_container_staging tests.test_native_container_review_boundary tests.test_report_container -v
       - name: Verify secret transport and owned process cleanup
         if: ${{ !cancelled() }}
-        run: python -m unittest tests.test_signal_customer_intake tests.test_runner_windows -v
+        run: python -m unittest tests.test_signal_customer_intake tests.test_runner_windows tests.test_bounded_archives -v
   test:
     timeout-minutes: 20
     # Windows portability remains experimental; retain visible diagnostics.

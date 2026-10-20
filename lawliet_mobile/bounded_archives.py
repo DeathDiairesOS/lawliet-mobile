@@ -8,6 +8,7 @@ import tarfile
 import tempfile
 import time
 import zipfile
+from contextlib import contextmanager
 from pathlib import Path
 
 from .core import UserError, _safe_name
@@ -16,6 +17,29 @@ from .core import UserError, _safe_name
 MAX_BYTES = 20 * 1024**3
 MAX_FILES = 100000
 RESERVE_BYTES = 1024**3
+
+
+@contextmanager
+def _publication(destination):
+    if os.name == 'nt':
+        from .windows_archive import ArchivePublication
+        with ArchivePublication(destination) as result:
+            yield result
+        return
+    identity = destination.stat()
+    with tempfile.TemporaryDirectory(prefix='.lawliet-archive-', dir=destination.parent) as temporary:
+        stage = Path(temporary) / 'complete'
+        stage.mkdir(mode=0o700)
+        def publish():
+            current = destination.lstat()
+            # Detect replacement/content changes before the existing POSIX
+            # publication operation; this check is not a race-free rename claim.
+            if (not stat.S_ISDIR(current.st_mode)
+                    or (current.st_dev, current.st_ino) != (identity.st_dev, identity.st_ino)
+                    or any(destination.iterdir())):
+                raise UserError('Archive destination changed during decoding.')
+            os.replace(stage, destination)
+        yield stage, publish
 
 
 def extract_bounded(source, destination, *, password=None,
@@ -53,10 +77,7 @@ def extract_bounded(source, destination, *, password=None,
         if shutil.disk_usage(destination.parent).free < RESERVE_BYTES:
             raise UserError('Archive decoding reached its 1 GiB disk reserve.')
 
-    with tempfile.TemporaryDirectory(prefix='.lawliet-archive-', dir=destination.parent) as temporary:
-        stage = Path(temporary) / 'complete'
-        stage.mkdir(mode=0o700)
-
+    with _publication(destination) as (stage, publish):
         def member(name, size, directory=False):
             nonlocal members
             guard()
@@ -138,5 +159,5 @@ def extract_bounded(source, destination, *, password=None,
         else:
             raise UserError('Archive format has no qualified bounded decoder: ' + suffix)
         guard()
-        os.replace(stage, destination)
+        publish()
     return sorted(files)
