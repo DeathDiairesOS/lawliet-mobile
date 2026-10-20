@@ -32,7 +32,8 @@
   function busy(change,label){S.pending+=change;$('busy-line').hidden=S.pending===0;$('busy-text').textContent=label||'Working…';$('footer-status').textContent=S.pending?'Local operation in progress':'Local workspace · Ready';}
   async function run(fn,label='Working…'){busy(1,label);try{return await fn();}catch(error){notice(error.message||text(error),true);return null;}finally{busy(-1,label);}}
   async function api(action,values={},caseID=S.caseID){const request={action,...values};if(caseID)request.case=caseID;const response=await bridgeCall(()=>window.pywebview.api.request(request));if(!response||response.ok!==true)throw new Error(response?.error||'The local backend returned an invalid response.');return response.result;}
-  async function choose(kind){return await window.pywebview.api.choose_path(kind);}
+  let smokePaths=null;
+  async function choose(kind){if(smokePaths&&Object.hasOwn(smokePaths,kind)){const path=smokePaths[kind];delete smokePaths[kind];return path;}return await window.pywebview.api.choose_path(kind);}
   function current(generation,caseID=S.caseID){return generation===S.generation&&caseID===S.caseID;}
   function requireCurrent(caseID,generation){if(!current(generation,caseID))throw new Error('The selected case changed. Reopen this action from the intended case.');}
   function resetMedia(){mediaQueue=[];S.media.clear();if(mediaObserver)mediaObserver.disconnect();mediaObserver=null;}
@@ -148,84 +149,67 @@
       await navigate('reports');await openReport({id:draft.draft_id,kind:'original'});
     });
   }
-  // The backend exposes fixture/result routes only when launched with --smoke-test.
-  // Normal application sessions cannot create this fixture or use this test route.
+  // These routes and native-picker substitutions exist only for explicit,
+  // synthetic native-window qualification. Normal sessions have no fixture.
   window.lawlietSmoke=async()=>{
     const steps=[];
-    let outcome;
+    let outcome,fixture,phase='initial',sourceInspection,selectedFindingSnapshot;
+    const literal='<img src=x onerror="window.evidenceExecuted=true">';
+    const examiner='Synthetic QA examiner';
+    const findingNote='SYNTHETIC TEST ONLY: literal message content was inspected against its retained SQLite record; this does not establish a real-world event.';
     async function waitFor(check,label){const deadline=Date.now()+35000;while(Date.now()<deadline){if(check())return;await new Promise(resolve=>setTimeout(resolve,25));}throw new Error('Smoke UI action timed out: '+label+' · '+$('notice').textContent);}
+    function assert(value,message){if(!value)throw new Error(message);}
+    function btn(label,root=$('view')){const found=[...root.querySelectorAll('button')].find(node=>node.textContent===label);assert(found,'Missing UI button: '+label);return found;}
+    async function click(node,label){assert(node&&!node.disabled,'Unavailable UI action: '+label);node.click();await waitFor(()=>S.pending===0,label);}
+    function control(label,root=document.querySelector('.modal')){const f=[...root.querySelectorAll('label.field')].find(node=>node.firstElementChild?.textContent===label);assert(f,'Missing UI field: '+label);return f.querySelector('input,textarea,select');}
+    async function submit(title){const form=document.querySelector('.modal');assert(form,'Missing form for '+title);form.requestSubmit();await waitFor(()=>S.pending===0,title);}
+    async function closeResult(){const form=document.querySelector('.modal');assert(form,'Missing result dialog');form.requestSubmit();await waitFor(()=>!document.querySelector('.modal'),'close result');}
+    async function go(view){await click($('navigation').querySelector('[data-view="'+view+'"]'),'navigate '+view);assert(S.view===view,'Navigation did not select '+view);}
+    async function pickCase(id){const picker=$('case-switch');assert([...picker.options].some(option=>option.value===id),'Case is absent from the catalog after restart');picker.value=id;picker.dispatchEvent(new Event('change'));await waitFor(()=>S.pending===0&&S.caseID===id,'select persisted case');}
+    async function create(id){await click($('cases-nav'),'case catalog');await click(btn('New case'),'new case');control('Case identifier').value=id;control('Case name').value='Synthetic desktop qualification · '+id;control('Examiner').value=examiner;await submit('create case form');assert(S.caseID===id&&!document.querySelector('.modal'),'Case creation form did not complete');steps.push({step:'create_case_ui',case_id:id});}
+    async function importEvidence(path,missing=false){await go('evidence');await click(btn('Import evidence'),'import dialog');control('Input').value='folder';smokePaths={folder:path};await click(btn('Browse…',document.querySelector('.modal')),'synthetic native picker');assert(control('Source path').value===path,'Native selection did not reach the import form');control('Platform').value='android';control('Process with').value='native';await submit('import and index form');if(missing){assert($('notice').className==='error'&&$('notice').textContent&&document.querySelector('.modal h2')?.textContent==='Import preserved evidence','Missing evidence did not produce a visible error');steps.push({step:'missing_input_ui',visible_error:$('notice').textContent});await click(btn('Cancel',document.querySelector('.modal')),'cancel invalid import');notice('');return;}assert(document.querySelector('.modal h2')?.textContent==='Import result','Import did not produce a result: '+$('notice').textContent);const result=JSON.parse(document.querySelector('.modal pre').textContent);steps.push({step:'import_ui',case_id:S.caseID,result});await closeResult();}
+    async function records(caseID){const rows=[];for(let offset=0;offset<1000;offset+=100){const page=await api('records',{offset},caseID);rows.push(...page.records);if(!page.has_more)return rows;}throw new Error('Synthetic corpus unexpectedly exceeds bounded record pagination');}
+    async function selectFilter(label,value){const node=document.querySelector('[aria-label="'+label+'"]');assert(node,'Missing filter '+label);node.value=value;node.dispatchEvent(new Event('change'));await waitFor(()=>S.pending===0&&document.querySelector('[aria-label="'+label+'"]')?.value===value,label);}
+    async function clearSearch(){const node=document.querySelector('[aria-label="Search parsed evidence"]');node.value='';await click(btn('Search'),'clear search');}
+    function checkSelectedFinding(finding){const expected=fixture.oracle.records.find(record=>record.body===literal);assert(finding&&finding.snapshot&&finding.artifact_id===finding.snapshot.id,'Saved finding is not bound to its snapshot');for(const key of ['logical_path','source_ref','source_sha256','body','title','timestamp','timestamp_raw','parser','category'])assert(finding.snapshot[key]===expected[key],'Saved finding lost the exact selected field: '+key);selectedFindingSnapshot=finding.snapshot;}
+    async function inspectLiteral(){await go('artifacts');await selectFilter('Artifact category','messages');const search=document.querySelector('[aria-label="Search parsed evidence"]');search.value='onerror';await click(btn('Search'),'literal text search');const rows=[...$('view').querySelectorAll('.artifact-table tbody tr')];assert(rows.length===1&&rows[0].textContent.includes(literal),'Search did not render exactly one literal message');rows[0].click();await waitFor(()=>S.pending===0&&document.querySelector('.inspector')?.textContent.includes(literal),'source inspector');const source=fixture.oracle.records.find(record=>record.body===literal);assert(source,'Independent oracle has no literal message');const inspector=document.querySelector('.inspector');for(const value of [source.logical_path,source.source_ref,source.source_sha256,source.timestamp_raw,source.timestamp,source.parser])assert(inspector.textContent.includes(String(value)),'Evidence inspector lost a source/timestamp field');assert(!window.evidenceExecuted&&!document.querySelector('#view img[onerror]'),'Evidence became executable markup');await click(btn('Inspect source bytes',inspector),'inspect retained source bytes');assert(document.querySelector('.modal h2')?.textContent==='Retained source bytes','Source inspection did not open');const bytes=JSON.parse(document.querySelector('.modal pre').textContent);sourceInspection=bytes;assert(bytes.source_sha256===source.source_sha256&&bytes.logical_path===source.logical_path,'Source-byte inspector is not bound to expected evidence');await closeResult();steps.push({step:'search_source_inspector_ui',matched_rows:1,literal_text_preserved:true,source_sha256:bytes.source_sha256,timestamp:source.timestamp,timestamp_raw:source.timestamp_raw});}
+    async function checkTimeline(){await clearSearch();await go('timeline');const sources=document.querySelector('[aria-label="Evidence and parser source"]');const sourceID=[...sources.options].find(option=>option.value)?.value;assert(sourceID,'Parsed source selector is empty');await selectFilter('Evidence and parser source',sourceID);await selectFilter('Artifact category','messages');const expected=fixture.oracle.records.filter(record=>record.category==='messages');assert($('view').querySelectorAll('.artifact-table tbody tr').length===expected.length,'All-time timeline lost messages');await click(btn('7 days'),'seven day timeline');const dated=expected.filter(record=>record.timestamp);const rows=[...$('view').querySelectorAll('.artifact-table tbody tr')];assert(rows.length===dated.length,'Seven-day range did not preserve dated / undated distinction');const actualTimes=rows.map(row=>row.firstElementChild.textContent);assert(JSON.stringify(actualTimes)===JSON.stringify(dated.map(row=>row.timestamp.replace('T',' ')).sort()),'Timeline is not ordered by the independently expected observed timestamps');document.querySelector('[aria-label="Timeline start date"]').value=fixture.oracle.timeline.since;document.querySelector('[aria-label="Timeline end date"]').value=fixture.oracle.timeline.until;await click(btn('Apply dates'),'explicit timeline range');const bounded=await api('records',recordRequest());assert(JSON.stringify(bounded.records.map(record=>record.source_ref))===JSON.stringify(fixture.oracle.timeline.source_refs),'Explicit time bounds differ from independent expected record references');await click(btn('All time'),'restore all-time timeline');assert([...$('view').querySelectorAll('.artifact-table tbody tr')].some(row=>row.firstElementChild.textContent==='Undated'),'Invalid original time was silently assigned a timestamp');steps.push({step:'timeline_source_filter_ui',dated:dated.length,undated:expected.length-dated.length,range_days:7});}
+    async function checkSQLite(){await go('files');const logicalPath=fixture.oracle.records.find(record=>record.category==='messages').logical_path;const row=[...$('view').querySelectorAll('tbody tr')].find(node=>node.firstElementChild?.textContent===logicalPath);assert(row,'Retained SQLite source is absent from files view');await click(btn('SQLite',row),'SQLite dialog');control('Bounded query').value='SELECT _id, body FROM sms ORDER BY _id';await submit('read-only SQLite query');assert(document.querySelector('.modal h2')?.textContent==='SQLite query result','SQLite query failed: '+$('notice').textContent);const queried=JSON.parse(document.querySelector('.modal pre').textContent);const bodies=fixture.oracle.records.filter(record=>record.category==='messages').map(record=>record.body).sort();assert(queried.status==='complete'&&JSON.stringify(queried.preview.rows.map(row=>row[1]).sort())===JSON.stringify(bodies),'SQLite working-copy query differs from independent SMS oracle, including WAL-only message');assert(!window.evidenceExecuted&&!document.querySelector('.modal img[onerror]'),'SQLite result executed evidence');steps.push({step:'sqlite_query_ui',rows:queried.preview.rows.length,columns:queried.preview.columns,result_sha256:queried.preview.result_sha256});await closeResult();}
+    async function checkMedia(){await go('artifacts');await selectFilter('Artifact category','media');const row=$('view').querySelector('.artifact-table tbody tr');assert(row,'Synthetic media not displayed');row.click();await waitFor(()=>document.querySelector('.preview-image')?.complete&&document.querySelector('.preview-image')?.naturalWidth===1,'automatic verified media preview');steps.push({step:'automatic_media_ui',width:document.querySelector('.preview-image').naturalWidth,source_sha256:fixture.oracle.records.find(record=>record.category==='media').source_sha256});}
+    async function openPersistedReport(report){await go('reports');const row=[...$('view').querySelectorAll('tbody tr')].find(node=>node.firstElementChild?.textContent===report.id);assert(row,'Persisted report is absent from Reports');row.click();await waitFor(()=>S.pending===0&&document.querySelector('.report-text'),'open persisted report');assert(document.querySelector('.report-text').textContent.includes(findingNote),'Persisted report lost the examiner finding');const review=await api('customer-report-review',{bundle_id:report.id,kind:'original',expected_manifest_sha256:report.manifest_sha256});assert(review.approval&&review.approval.reviewer===examiner&&!btn('Export approved report').disabled,'Persisted approval was not verified or export did not become available');steps.push({step:'report_reopened_ui',id:report.id,approval_persisted:true});}
     try{
-      const fixture=await api('desktop-smoke-fixture',{},'');
-      if(!fixture.case_id||!fixture.path)throw new Error('Synthetic smoke fixture is unavailable.');
-      await api('create',{id:fixture.case_id,name:'Desktop smoke · synthetic evidence',examiner:'Synthetic examiner'},'');
-      steps.push({step:'create',case_id:fixture.case_id});
-      const imported=await api('import-evidence',{path:fixture.path,platform:'android',engine:'native'},fixture.case_id);
-      steps.push({step:'import',result:imported});
-      await api('case-task-add',{text:'Compare indexed records with synthetic source'},fixture.case_id);
-      await catalog();
-      await selectCase(fixture.case_id);
-      const page=await api('records',{offset:0,presentation:'investigator'},fixture.case_id);
-      if(!page.records.length)throw new Error('Synthetic input produced no indexed artifacts.');
-      const record=page.records.find(r=>r.category==='messages')||page.records[0];
-      const finding=await api('finding-add',{artifact_id:record.id,note:'Synthetic desktop smoke observation; source linkage tested.',examiner:'Synthetic examiner'},fixture.case_id);
-      steps.push({step:'save_finding',finding_id:finding.id,artifact_id:record.id,source_ref:record.source_ref,source_sha256:record.source_sha256});
-      for(const view of ['evidence','acquisition','artifacts','timeline','files','findings','agent','mvt']){
-        await navigate(view);
-        if(!$('view').children.length)throw new Error('Empty rendered view: '+view);
-        steps.push({step:'render',view,title:$('page-title').textContent});
+      await waitFor(()=>S.info&&S.pending===0,'application initialization');
+      fixture=await api('desktop-smoke-fixture',{},'');phase=fixture.phase;
+      assert(fixture.synthetic===true&&fixture.case_id&&fixture.path&&fixture.oracle,'Independent synthetic smoke fixture is unavailable');
+      let report,actualRecords,missingActualRecords;
+      if(phase==='reopen'){
+        await pickCase(fixture.case_id);
+        actualRecords=await records(fixture.case_id);
+        await inspectLiteral();
+        await go('findings');assert($('view').textContent.includes(findingNote),'Saved finding did not survive restart');checkSelectedFinding((await api('findings',{offset:0})).findings.find(item=>item.note===findingNote));
+        report=fixture.previous.report;await openPersistedReport(report);
+      }else{
+        await create(fixture.case_id);await importEvidence(fixture.path);
+        const before=(await api('overview')).evidence.length;
+        await importEvidence(fixture.nonexistent_path,true);
+        assert((await api('overview')).evidence.length===before,'Missing source produced a phantom evidence import');
+        actualRecords=await records(fixture.case_id);
+        await inspectLiteral();
+        await click(btn('Save finding',document.querySelector('.inspector')),'save finding dialog');control('Examiner').value=examiner;control('Interpretation / note').value=findingNote;await submit('save finding form');assert(!document.querySelector('.modal')&&$('notice').textContent.includes('Finding saved'),'Finding form did not complete');
+        const finding=(await api('findings',{offset:0})).findings.find(item=>item.note===findingNote);checkSelectedFinding(finding);steps.push({step:'save_finding_ui',artifact_id:finding.artifact_id,source_sha256:finding.snapshot.source_sha256});
+        await checkTimeline();await checkSQLite();await checkMedia();
+        await go('findings');const check=document.querySelector('[aria-label="Select finding '+finding.id+'"]');assert(check,'Saved finding selection is absent');check.checked=true;check.dispatchEvent(new Event('change'));await click(btn('Prepare report from selected'),'report draft dialog');control('Report objective').value='SYNTHETIC TEST ONLY: verify preserved source fields, examiner review and local report export.';await submit('prepare draft form');assert(document.querySelector('.report-text')?.textContent.includes(findingNote),'Report draft did not present the selected finding');assert(btn('Export approved report').disabled,'Unapproved report can be exported');steps.push({step:'prepare_report_ui',export_disabled_until_approval:true});
+        const history=await api('report-history',{offset:0});const entry=history.items.find(item=>item.kind==='original');assert(entry,'Prepared draft is absent from report history');const preview=await api('desktop-report',{bundle_id:entry.id,kind:entry.kind});report={id:entry.id,manifest_sha256:preview.manifest_sha256};
+        control('Reviewer',$('view')).value=examiner;control('Approval declaration',$('view')).value='SYNTHETIC QA ONLY: I reviewed the frozen test corpus, source references, limitations and these exact report bytes. This approval is not for customer evidence.';const ack=$('view').querySelector('.check-row input[type="checkbox"]');assert(ack,'Review acknowledgement is absent');ack.checked=true;await click(btn('Record approval for these bytes'),'explicit synthetic report approval');assert(!btn('Export approved report').disabled,'Approval did not enable local export');smokePaths={save:fixture.export_path};await click(btn('Export approved report'),'approved synthetic export');assert(document.querySelector('.modal h2')?.textContent==='Local report release receipt','Approved report export did not complete: '+$('notice').textContent);const release=JSON.parse(document.querySelector('.modal pre').textContent);assert(release.draft_id===report.id&&release.manifest_sha256===report.manifest_sha256,'Export receipt lost exact review binding');steps.push({step:'approve_export_ui',id:report.id,manifest_sha256:report.manifest_sha256,synthetic_only:true});await closeResult();
+        await create(fixture.missing_case_id);await importEvidence(fixture.missing_path);missingActualRecords=await records(fixture.missing_case_id);steps.push({step:'missing_wal_input',declared_limitation:'Intentionally omitted WAL. The missing WAL-only message must not appear; absence is not a clean-device finding.',records:missingActualRecords.length});await pickCase(fixture.case_id);
+        for(const view of ['acquisition','agent','mvt']){await go(view);assert($('view').children.length,'Empty view: '+view);steps.push({step:'render_without_collection',view});}
+        await openPersistedReport(report);
       }
-      // Exercise the real category/search handlers and evidence inspector. The
-      // hostile-looking value must remain literal text through every view.
-      await navigate('artifacts');
-      const category=document.querySelector('[aria-label="Artifact category"]');
-      category.value='messages';category.dispatchEvent(new Event('change'));
-      await waitFor(()=>S.pending===0&&document.querySelector('[aria-label="Artifact category"]')?.value==='messages','message category');
-      const search=document.querySelector('[aria-label="Search parsed evidence"]');
-      search.value='onerror';
-      [...$('view').querySelectorAll('button')].find(b=>b.textContent==='Search').click();
-      await waitFor(()=>S.pending===0&&S.query==='onerror','artifact search');
-      const matched=[...$('view').querySelectorAll('.artifact-table tbody tr')];
-      const literal='<img src=x onerror="window.evidenceExecuted=true">';
-      if(matched.length!==1||!matched[0].textContent.includes(literal))throw new Error('Filtered search did not render the exact synthetic message as text.');
-      matched[0].click();
-      await waitFor(()=>S.pending===0&&document.querySelector('.inspector')?.textContent.includes(literal),'source inspector');
-      if(document.querySelector('#view img[onerror]')||window.evidenceExecuted)throw new Error('Evidence content became executable markup.');
-      steps.push({step:'search_filter_inspector',category:'messages',query:'onerror',matched_rows:matched.length,literal_text_preserved:true});
-      S.query='';S.category='';
-      await navigate('files');
-      const inventory=await api('file-inventory',{query:'sms.db',offset:0,limit:100},fixture.case_id);
-      const database=inventory.files.find(file=>file.logical_path.split('/').at(-1)==='sms.db');
-      if(!database)throw new Error('Synthetic SQLite source is absent from the retained inventory.');
-      const fileRow=[...$('view').querySelectorAll('tbody tr')].find(row=>row.firstElementChild?.textContent===database.logical_path);
-      const sqliteButton=fileRow&&[...fileRow.querySelectorAll('button')].find(b=>b.textContent==='SQLite');
-      if(!sqliteButton)throw new Error('SQLite examination action did not render for the retained source.');
-      sqliteButton.click();
-      await waitFor(()=>document.querySelector('.modal textarea'),'SQLite query dialog');
-      document.querySelector('.modal textarea').value='SELECT _id, body FROM sms ORDER BY _id';
-      document.querySelector('.modal').requestSubmit();
-      await waitFor(()=>S.pending===0&&document.querySelector('.modal h2')?.textContent==='SQLite query result','read-only SQLite query');
-      const queried=JSON.parse(document.querySelector('.modal pre').textContent);
-      if(queried.status!=='complete'||queried.preview?.rows?.length!==2||queried.preview.rows[1][1]!==literal)throw new Error('SQLite UI query did not return the two expected unchanged messages: '+(queried.error||queried.status));
-      if(window.evidenceExecuted||document.querySelector('.modal img[onerror]'))throw new Error('SQLite evidence executed as markup.');
-      steps.push({step:'sqlite_query_ui',file_id:database.id,run_id:queried.run_id,rows:queried.preview.rows.length,columns:queried.preview.columns,result_sha256:queried.preview.result_sha256});
-      document.querySelector('.modal').requestSubmit();
-      await waitFor(()=>!document.querySelector('.modal'),'close SQLite result');
-      if(window.evidenceExecuted)throw new Error('Evidence content executed as a script.');
-      const image=page.records.find(r=>r.category==='media');
-      if(image){const result=await bridgeCall(()=>window.pywebview.api.media({case:fixture.case_id,artifact_id:image.id}));if(!result?.ok||!result.result?.data_url)throw new Error(result?.error||'Synthetic media preview failed.');steps.push({step:'media',artifact_id:image.id,sha256:result.result.sha256,mime:result.result.mime});}
-      const investigation=await api('investigation-from-findings',{objective:'Verify the cross-platform desktop source-to-report workflow.',finding_ids:[finding.id]},fixture.case_id);
-      const draft=await api('customer-report-draft',{investigation_id:investigation.investigation_id},fixture.case_id);
-      await navigate('reports');
-      await openReport({id:draft.draft_id,kind:'original'});
-      if(!document.querySelector('.report-text')?.textContent)throw new Error('Verified report text did not render.');
-      steps.push({step:'report',draft_id:draft.draft_id,manifest_sha256:draft.manifest_sha256,review_status:draft.review_status});
-      const integrity=await api('verify',{},fixture.case_id);
-      if(!integrity.ok)throw new Error('Synthetic case integrity check failed.');
-      steps.push({step:'integrity',result:integrity});
-      outcome={ok:true,case_id:fixture.case_id,steps,scope:'Synthetic desktop rendering and local backend; no physical collection, external model, approval or release.'};
-    }catch(error){outcome={ok:false,error:error.message||text(error),steps};notice(outcome.error,true);}
-    await api('desktop-smoke-result',{result:outcome},'');
-    return outcome;
+      const integrity=await api('verify',{},fixture.case_id);assert(integrity.ok,'Synthetic case integrity check failed');assert(!window.evidenceExecuted,'Evidence executed as a script');steps.push({step:'integrity',result:integrity});
+      outcome={ok:true,case_id:fixture.case_id,phase,steps,actual_records:actualRecords,missing_actual_records:missingActualRecords,source_inspection:sourceInspection,selected_finding_snapshot:selectedFindingSnapshot,report,approval_persisted:true,native_picker:'Exact synthetic paths substituted; all import/review/approval/export handlers exercised.',scope:'Frozen synthetic corpus only. Explicit synthetic examiner approval and local export; no real evidence, devices, external models or customer delivery.'};
+    }catch(error){outcome={ok:false,error:error.message||text(error),phase,steps};notice(outcome.error,true);}
+    finally{smokePaths=null;}
+    await api('desktop-smoke-result',{result:outcome},'');return outcome;
   };
   let initialized=false;
   async function start(){if(initialized)return;initialized=true;await run(init,'Open local workspace');}

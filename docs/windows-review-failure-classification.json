@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "scope": "One supplied Android evidence directory: import, native parsing/indexing, desktop search/timeline/source inspection including SQLite queries and retained results, saved finding, examiner review, local report export and package verification. No device collection, container execution or Mulder/model qualification.",
+  "baseline": {
+    "commit": "5e0dc1e",
+    "workflow_run": 39190353118,
+    "platform": "windows-latest",
+    "python": "3.11.9",
+    "tests_run": 1407,
+    "failures": 36,
+    "errors": 151,
+    "skipped": 360,
+    "failure_entries": 187,
+    "counting": "Failure entries include unittest subtests; groups partition those 187 entries, not unique test methods."
+  },
+  "groups": [
+    {
+      "id": "collection_platform_gaps",
+      "scope": "out_of_scope",
+      "classification": "product_platform_gap",
+      "failure_entries": 46,
+      "test_modules": {
+        "test_agent_collection": 7,
+        "test_android_workflow": 3,
+        "test_contacts_cli_scope": 1,
+        "test_nonroot": 1,
+        "test_phone_assessment_scope": 4,
+        "test_provider_contacts": 3,
+        "test_provider_contacts_boundaries": 8,
+        "test_provider_sms": 11,
+        "test_provider_sms_staging": 4,
+        "test_trash_collection": 4
+      },
+      "representative_tests": [
+        "test_agent_collection.AgentCollectionTests.test_trash_runs_with_lease_and_refuses_symlink_staging",
+        "test_android_workflow.AndroidWorkflowTests.test_collector_counts_payloads_and_keeps_missing_distinct",
+        "test_android_workflow.AndroidWorkflowTests.test_empty_successful_backup_not_claimed_collected"
+      ],
+      "reason": "Provider collection/staging still invokes POSIX-only directory APIs; diagnostic collection also has downstream incomplete-state assertions. Existing-evidence native review does not invoke these collectors.",
+      "status": "not_changed"
+    },
+    {
+      "id": "optional_file_fixture_semantics",
+      "scope": "out_of_scope",
+      "classification": "test_fixture",
+      "failure_entries": 2,
+      "test_modules": {
+        "test_archive_cache": 2
+      },
+      "representative_tests": [
+        "test_archive_cache.ArchiveCache.test_atomic_path_replacement_during_hash_is_refused",
+        "test_archive_cache.ArchiveCache.test_fifo_output_refused_without_open"
+      ],
+      "reason": "Archive-cache tests assume POSIX FIFO APIs or a POSIX read hook. The supplied-directory review workflow does not use the optional archive-member cache.",
+      "status": "not_changed"
+    },
+    {
+      "id": "archive_publication_platform_bug",
+      "scope": "out_of_scope",
+      "classification": "product_bug",
+      "failure_entries": 3,
+      "test_modules": {
+        "test_bounded_archives": 3
+      },
+      "representative_tests": [
+        "test_bounded_archives.BoundedArchivesTests.test_safe_exact_byte_and_member_cap",
+        "test_bounded_archives.BoundedArchivesTests.test_tar_gzip_is_decoded_as_members",
+        "test_bounded_archives.BoundedArchivesTests.test_zero_filled_compressed_image_is_not_an_empty_tar"
+      ],
+      "reason": "Mulder general-archive decode calls os.replace on an existing empty directory, which Windows rejects. The selected supplied-directory native import workflow does not call this helper.",
+      "status": "not_changed"
+    },
+    {
+      "id": "linux_container_worker_fixture_target",
+      "scope": "out_of_scope",
+      "classification": "test_fixture_execution_target",
+      "failure_entries": 60,
+      "test_modules": {
+        "test_browser_download_residual": 1,
+        "test_native_container_codec_worker": 6,
+        "test_native_container_worker": 17,
+        "test_report_container": 8,
+        "test_report_container_codec": 6,
+        "test_report_container_recovery": 7,
+        "test_report_origin_binding": 15
+      },
+      "representative_tests": [
+        "test_browser_download_residual.BrowserResidual.test_actual_private_worker_footer_passes_existing_host_codec_with_omissions",
+        "test_native_container_codec_worker.CodecWorkerTests.test_actual_empty",
+        "test_native_container_codec_worker.CodecWorkerTests.test_actual_media_semantic_file_binding"
+      ],
+      "reason": "Tests execute Linux container-worker implementations directly in the Windows host interpreter; those workers require O_NOFOLLOW. No Windows container execution qualification is implied.",
+      "status": "not_changed"
+    },
+    {
+      "id": "optional_container_fixture_semantics",
+      "scope": "out_of_scope",
+      "classification": "test_fixture",
+      "failure_entries": 13,
+      "test_modules": {
+        "test_container_runner": 1,
+        "test_exif_recovery_independent_review": 1,
+        "test_exif_recovery_registration": 2,
+        "test_mulder_container_bridge": 3,
+        "test_native_container_review_boundary": 2,
+        "test_native_recovery_terminal_unique": 1,
+        "test_sql_recovery_audited_boundary": 3
+      },
+      "representative_tests": [
+        "test_exif_recovery_independent_review.IndependentReview.test_receipt_hardlink_fifo_oversize_and_wrong_owner_refuse",
+        "test_exif_recovery_registration.Registration.test_failed_status_live_daemon_refuses_with_audited_old_labels_after_move",
+        "test_exif_recovery_registration.Registration.test_legacy_full_unique_terminal_can_move_and_offline_open"
+      ],
+      "reason": "Optional container tests assume AF_UNIX, FIFO creation, POSIX permissions or renaming a case while its SQLite connection is open. These fixtures need separate platform-aware qualification.",
+      "status": "not_changed"
+    },
+    {
+      "id": "container_host_platform_gaps",
+      "scope": "out_of_scope",
+      "classification": "product_platform_gap",
+      "failure_entries": 27,
+      "test_modules": {
+        "test_exif_recovery_registration": 1,
+        "test_native_container_review_boundary": 5,
+        "test_sql_recovery_audited_boundary": 11,
+        "test_sqlite_container_staging": 10
+      },
+      "representative_tests": [
+        "test_exif_recovery_registration.Registration.test_verified_stopped_future_worker_reconciles_once_and_retains_audit",
+        "test_native_container_review_boundary.StagingBoundary.test_healthy_staging_reaches_create_with_only_pinned_python",
+        "test_native_container_review_boundary.StagingBoundary.test_nested_link_and_existing_leaf_refuse"
+      ],
+      "reason": "Optional container staging/recovery uses O_DIRECTORY and POSIX path-bound registration assumptions. The selected workflow uses host native parsing without containers.",
+      "status": "not_changed"
+    },
+    {
+      "id": "review_boundary_fixture_semantics",
+      "scope": "in_scope",
+      "classification": "test_fixture",
+      "failure_entries": 17,
+      "test_modules": {
+        "test_examination_report": 2,
+        "test_export_boundaries": 14,
+        "test_html_pair_integrity": 1
+      },
+      "representative_tests": [
+        "test_export_boundaries.ExportBoundaryTests.test_all_paired_formats_detect_companion_replacement_after_publish",
+        "test_export_boundaries.ExportBoundaryTests.test_all_paired_formats_preserve_foreign_replacement_on_failure",
+        "test_export_boundaries.ExportBoundaryTests.test_failure_cleanup_preserves_replaced_file"
+      ],
+      "reason": "Windows retained handles deny write/delete before POSIX replacement hooks can run. The tests also assumed chmod bits or a POSIX publication syscall. Assertions now exercise actual Windows protection, cleanup and collision preservation; POSIX checks remain.",
+      "status": "adapted_pending_native_ci"
+    },
+    {
+      "id": "sqlite_and_package_boundary_fixture_semantics",
+      "scope": "in_scope",
+      "classification": "test_fixture",
+      "failure_entries": 9,
+      "test_modules": {
+        "test_sqlite_child_output": 4,
+        "test_sqlite_result_view": 4,
+        "test_package_verification": 1
+      },
+      "representative_tests": [
+        "test_sqlite_child_output.ChildOutputReads.test_parent_replacement_is_refused",
+        "test_sqlite_result_view.ResultView.test_leaf_replacement_during_read_refuses",
+        "test_package_verification.PackageVerificationTests.test_symlinks_hardlinks_and_fifo_refused"
+      ],
+      "reason": "Windows retained handles refuse parent/leaf replacement before POSIX mutation fixtures expect it, and Windows has no POSIX FIFO API. Tests now assert real Windows replacement refusal, verified retained bytes, failed-receipt recovery and nonregular-file rejection while preserving POSIX mutation/FIFO assertions. Package verification accepts the documented boundary exception families. No production guard was relaxed.",
+      "status": "adapted_pending_native_ci"
+    },
+    {
+      "id": "signal_windows_capability_refusal",
+      "scope": "out_of_scope",
+      "classification": "unsupported_capability",
+      "failure_entries": 8,
+      "test_modules": {
+        "test_extended": 1,
+        "test_signal_customer_intake": 7
+      },
+      "representative_tests": [
+        "test_extended.ExtendedTests.test_signal_private_terminal_does_not_log_secret",
+        "test_signal_customer_intake.SignalCustomerIntakeTests.test_supported_decode_reaches_existing_backend_and_preserves_provenance",
+        "test_signal_customer_intake.SignalCustomerIntakeTests.test_decoder_input_mutation_fails_without_importing_derived_evidence"
+      ],
+      "reason": "Secure Signal passphrase transport explicitly requires macOS/Linux. Synthetic decoder tests expect later states despite this intentional Windows capability refusal.",
+      "status": "not_changed"
+    },
+    {
+      "id": "development_watch_tool_platform",
+      "scope": "out_of_scope",
+      "classification": "development_tool_platform_gap",
+      "failure_entries": 1,
+      "test_modules": {
+        "test_handoff_watch": 1
+      },
+      "representative_tests": [
+        "unittest.loader._FailedTest.test_handoff_watch"
+      ],
+      "reason": "The development handoff watcher imports fcntl. It is not part of the evidence-review desktop workflow.",
+      "status": "not_changed"
+    },
+    {
+      "id": "leapp_fixture_newlines",
+      "scope": "out_of_scope",
+      "classification": "test_fixture",
+      "failure_entries": 1,
+      "test_modules": {
+        "test_leapp_review": 1
+      },
+      "representative_tests": [
+        "test_leapp_review.LeappReviewTests.test_discord_reports_keep_account_and_report_scopes_and_exact_content"
+      ],
+      "reason": "The multiline TSV fixture uses csv.DictWriter without newline=\"\", so Windows changes the written content. Native Android parsing in the selected workflow does not import this LEAPP fixture.",
+      "status": "not_changed"
+    }
+  ],
+  "scope_totals": {
+    "in_scope_failure_entries": 26,
+    "out_of_scope_failure_entries": 161
+  }
+}

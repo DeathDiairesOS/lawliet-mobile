@@ -27,4 +27,4 @@ lawliet-mobile = "lawliet_mobile.cli:main"
 include = ["lawliet_mobile*", "ancalor_mobile*"]
 
 [tool.setuptools.package-data]
-lawliet_mobile = ["desktop_assets/*.html", "desktop_assets/*.css", "desktop_assets/*.js", "desktop_assets/*.png"]
+lawliet_mobile = ["desktop_assets/*.html", "desktop_assets/*.css", "desktop_assets/*.js", "desktop_assets/*.png", "desktop_assets/*.json"]

@@ -140,7 +140,17 @@ class HtmlPairIntegrityTests(unittest.TestCase):
                         # Race after the initial existence check, before exclusive publication.
                         target.write_text('OTHER WRITER')
                     return original_link(source, destination, **kwargs)
-                with patch('lawliet_mobile.anchored_output.os.link', linking), self.assertRaises(FileExistsError):
+                if os.name == 'nt':
+                    from lawliet_mobile.windows_files import WindowsDirectory
+                    original_rename = WindowsDirectory.rename
+                    def renaming(directory, descriptor, name, **kwargs):
+                        if name == target.name:
+                            target.write_text('OTHER WRITER')
+                        return original_rename(directory, descriptor, name, **kwargs)
+                    race = patch.object(WindowsDirectory, 'rename', renaming)
+                else:
+                    race = patch('lawliet_mobile.anchored_output.os.link', linking)
+                with race, self.assertRaises(FileExistsError):
                     write_report(root, db, path)
                 self.assertEqual(target.read_text(), 'OTHER WRITER')
                 self.assertFalse((companion if which == 'output' else path).exists())

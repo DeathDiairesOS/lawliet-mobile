@@ -17,11 +17,15 @@ class ChildOutputReads(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve();work=root/'work';work.mkdir();foreign=root/'foreign';foreign.write_bytes(b'canary')
             (work/'normal').write_bytes(b'abc');(work/'symbolic').symlink_to(foreign)
-            os.link(foreign,work/'hard');os.mkfifo(work/'fifo')
+            os.link(foreign,work/'hard')
+            # Named FIFOs are POSIX-only; a directory exercises Windows'
+            # regular-file boundary without manufacturing an unsupported API.
+            if os.name == 'nt': (work/'special').mkdir()
+            else: os.mkfifo(work/'special')
             with ChildOutputs(work) as outputs:
                 self.assertEqual(outputs.read('normal',3),b'abc')
                 self.assertEqual(outputs.read('normal',2,prefix=True),b'ab')
-                for name,maximum in [('normal',2),('symbolic',10),('hard',10),('fifo',10),('../foreign',10)]:
+                for name,maximum in [('normal',2),('symbolic',10),('hard',10),('special',10),('../foreign',10)]:
                     with self.subTest(name=name),self.assertRaises((UserError,OSError)):
                         outputs.read(name,maximum)
 
@@ -29,6 +33,11 @@ class ChildOutputReads(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp).resolve();work=root/'work';work.mkdir();(work/'result').write_bytes(b'good')
             with ChildOutputs(work) as outputs:
+                if os.name == 'nt':
+                    with self.assertRaises(PermissionError): work.rename(root/'old')
+                    self.assertEqual(outputs.read('result',100), b'good')
+                    self.assertFalse((root/'old').exists())
+                    return
                 work.rename(root/'old');work.mkdir();(work/'result').write_bytes(b'foreign')
                 with self.assertRaisesRegex(UserError,'directory changed'):outputs.read('result',100)
 
@@ -44,6 +53,9 @@ class SQLiteChildOutputBoundary(unittest.TestCase):
                     folder=output.parent
                     if mode=='receipt-link':(folder/'receipt.json').symlink_to(foreign)
                     else:
+                        if os.name == 'nt':
+                            with self.assertRaises(PermissionError): folder.rename(folder.with_name(folder.name+'-moved'))
+                            raise OSError('Controlled failure after Windows refused run-directory replacement')
                         old=folder.with_name(folder.name+'-moved');folder.rename(old);folder.mkdir();moved.append((folder,old))
                     output.write_bytes(b'');errors=output.with_name(output.name+'.stderr');errors.write_bytes(b'')
                     return {'returncode':1,'stderr':str(errors)}
@@ -56,13 +68,15 @@ class SQLiteChildOutputBoundary(unittest.TestCase):
                         self.assertFalse((folder/'receipt.json').exists())
                         import shutil
                         shutil.rmtree(folder);old.rename(folder)
-                    row=case_db.execute('SELECT status,records FROM runs').fetchone();self.assertEqual((row['status'],row['records']),('running',0))
+                    refused_early = os.name == 'nt' and mode == 'directory-replaced'
+                    row=case_db.execute('SELECT status,records FROM runs').fetchone();self.assertEqual((row['status'],row['records']),('failed' if refused_early else 'running',0))
                     good=query(root,case_db,fid,'SELECT value FROM seed');self.assertEqual(good['preview']['rows'],[['approved input']])
-                    self.assertEqual([r['status'] for r in case_db.execute('SELECT status FROM runs ORDER BY rowid')],['interrupted','complete'])
+                    self.assertEqual([r['status'] for r in case_db.execute('SELECT status FROM runs ORDER BY rowid')],['failed' if refused_early else 'interrupted','complete'])
                     self.assertTrue(verify(root,case_db)['ok'])
 
     def test_linked_metadata_and_rows_are_failed_before_promotion(self):
-        for mode in ('metadata-symlink','metadata-hardlink','rows-symlink','rows-hardlink','metadata-fifo','metadata-oversize',
+        for mode in ('metadata-symlink','metadata-hardlink','rows-symlink','rows-hardlink',
+                     'metadata-directory' if os.name == 'nt' else 'metadata-fifo','metadata-oversize',
                      'stderr-symlink','stderr-hardlink','rows-invalid','rows-width','rows-count','rows-duplicate','rows-nonfinite','rows-overflow',
                      'rows-utf16','rows-utf32','metadata-utf16','missing-forged-result'):
             with self.subTest(mode=mode),tempfile.TemporaryDirectory() as temp:
@@ -80,6 +94,7 @@ class SQLiteChildOutputBoundary(unittest.TestCase):
                     if mode=='metadata-symlink':meta.symlink_to(foreign)
                     elif mode=='metadata-hardlink':os.link(foreign,meta)
                     elif mode=='metadata-fifo':os.mkfifo(meta)
+                    elif mode=='metadata-directory':meta.mkdir()
                     elif mode=='metadata-oversize':meta.write_bytes(b' '*(1024**2+1))
                     elif mode=='metadata-utf16':meta.write_bytes(json.dumps(metadata).encode('utf-16'))
                     else:meta.write_text(json.dumps(metadata))

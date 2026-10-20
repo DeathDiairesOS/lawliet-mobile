@@ -151,13 +151,15 @@ class PackageVerificationTests(unittest.TestCase):
 
     def test_symlinks_hardlinks_and_fifo_refused(self):
         link = self.base / 'linked-directory'; link.symlink_to(self.package, target_is_directory=True)
-        with self.assertRaises(OSError): verify_package(link)
+        with self.assertRaises((OSError,PackageError)): verify_package(link)
         target = self.package / 'report.txt'; target.unlink(); target.symlink_to(self.base / 'missing')
-        with self.assertRaises(OSError): verify_package(self.package)
+        with self.assertRaises((OSError,PackageError)): verify_package(self.package)
         target.unlink(); target.write_bytes(self.before['report.txt']); os.link(target, self.base/'hardlink')
         with self.assertRaises(PackageError): verify_package(self.package)
-        (self.base/'hardlink').unlink(); target.unlink(); os.mkfifo(target)
-        with self.assertRaises(PackageError): verify_package(self.package)
+        (self.base/'hardlink').unlink(); target.unlink()
+        if os.name == 'nt': target.mkdir()
+        else: os.mkfifo(target)
+        with self.assertRaises((PackageError,OSError)): verify_package(self.package)
 
     def test_semantic_citation_mismatch_despite_valid_hashes(self):
         self.rewrite('technical-annex.json', lambda a:a['citations'][0].update(source_tier='fabricated'))

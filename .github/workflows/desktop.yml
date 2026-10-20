@@ -1,4 +1,4 @@
-name: Native desktop smoke
+name: Desktop forensic workflow
 
 on:
   push:
@@ -90,7 +90,7 @@ jobs:
           if 'not found' in result.stdout:
               raise SystemExit('Qt xcb plugin has unresolved runtime dependencies')
       - name: Check the desktop bridge and evidence boundaries
-        run: python -m unittest tests.test_desktop tests.test_desktop_bridge tests.test_desktop_bridge_windows -v
+        run: python -m unittest tests.test_android_qualification tests.test_desktop_smoke_controller tests.test_desktop_receipts tests.test_desktop tests.test_desktop_bridge tests.test_desktop_bridge_windows tests.test_case_storage_boundaries tests.test_export_boundaries tests.test_examination_report tests.test_html_pair_integrity tests.test_sqlite_child_output tests.test_sqlite_result_view tests.test_package_verification -v
       - name: Exercise the installed native application with synthetic evidence
         shell: python
         run: |
@@ -112,28 +112,36 @@ jobs:
           log = receipts / 'desktop-smoke.log'
           renderer = os.environ['LAWLIET_SMOKE_RENDERER']
           metadata = {
+              'commit': os.environ['GITHUB_SHA'],
+              'runner_os': os.environ['RUNNER_OS'],
               'platform': platform.platform(), 'python': sys.version,
-              'renderer': renderer, 'evidence': 'generated synthetic fixture only',
+              'renderer': renderer, 'evidence': 'frozen synthetic Android corpus only',
+              'sqlite_version': __import__('sqlite3').sqlite_version,
               'package_versions': {
                   name: importlib.metadata.version(name)
                   for name in ('lawliet-mobile', 'pywebview')
               },
           }
           (receipts / 'environment.json').write_text(json.dumps(metadata, indent=2) + '\n', encoding='utf-8')
+          dependencies = subprocess.run(
+              [sys.executable, '-m', 'pip', 'freeze', '--all'],
+              capture_output=True, text=True, check=True,
+          )
+          (receipts / 'dependencies.txt').write_text(dependencies.stdout, encoding='utf-8')
           executable = shutil.which('lawliet-desktop')
           if not executable:
               raise SystemExit('Installed lawliet-desktop entry point was not found')
           command = [executable, '--workspace', str(workspace), '--smoke-test', str(result), '--renderer', renderer]
           if sys.platform.startswith('linux'):
               command = ['xvfb-run', '--auto-servernum', '--server-args=-screen 0 1360x900x24', *command]
-          # A real native window and renderer, with no browser automation, phone,
-          # external model, or privileged container. Run outside the checkout to
-          # verify installed package assets, and wait for Windows GUI entrypoints.
+          # Real native windows and renderers, including a fresh process restart.
+          # Synthetic report approval/export stays local; no phone, model or
+          # customer release. Run outside the checkout to verify installed assets.
           with log.open('w', encoding='utf-8') as output:
               try:
-                  process = subprocess.run(command, cwd=root, stdout=output, stderr=subprocess.STDOUT, timeout=240)
+                  process = subprocess.run(command, cwd=root, stdout=output, stderr=subprocess.STDOUT, timeout=600)
               except subprocess.TimeoutExpired:
-                  output.write('\nNative desktop process exceeded the 240-second limit.\n')
+                  output.write('\nNative desktop process exceeded the 600-second limit.\n')
                   raise
           print(log.read_text(encoding='utf-8', errors='replace'))
           if not result.is_file():
@@ -148,6 +156,35 @@ jobs:
         with:
           name: desktop-smoke-${{ matrix.os }}
           # Never upload case folders, imported evidence, user home, or a device.
-          path: ${{ runner.temp }}/lawliet-desktop-smoke/receipts/
+          path: |
+            ${{ runner.temp }}/lawliet-desktop-smoke/receipts/*.json
+            ${{ runner.temp }}/lawliet-desktop-smoke/receipts/*.log
+            ${{ runner.temp }}/lawliet-desktop-smoke/receipts/*.txt
+          if-no-files-found: warn
+          retention-days: 14
+
+  compare:
+    name: Compare native forensic results
+    needs: desktop
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: desktop-smoke-*
+          path: native-receipts
+      - name: Require identical evidence and independently expected record fields
+        run: python tools/check_desktop_receipts.py native-receipts --commit "${{ github.sha }}" --output native-comparison.json
+      - name: Retain the scoped cross-platform verdict
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: desktop-forensic-comparison
+          path: native-comparison.json
           if-no-files-found: warn
           retention-days: 14

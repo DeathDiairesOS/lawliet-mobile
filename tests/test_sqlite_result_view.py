@@ -85,13 +85,16 @@ class ResultView(unittest.TestCase):
     def test_links_and_fifo_refuse_for_all_control_and_result_files(self):
         for name in ('receipt.json', 'query.json', 'result.jsonl'):
             path = self.folder / name; held = self.base / ('held-' + name); path.rename(held)
-            for kind in ('symlink', 'hardlink', 'fifo'):
+            for kind in ('symlink', 'hardlink', 'directory' if os.name == 'nt' else 'fifo'):
                 if kind == 'symlink': path.symlink_to(held)
                 elif kind == 'hardlink': os.link(held, path)
+                elif kind == 'directory': path.mkdir()
                 else: os.mkfifo(path)
                 try:
                     with self.subTest(name=name, kind=kind), self.assertRaises(core.UserError): self.view()
-                finally: path.unlink()
+                finally:
+                    if kind == 'directory': path.rmdir()
+                    else: path.unlink()
             held.rename(path)
 
     def test_actual_sparse_view_limits_refuse_before_hash_or_parse(self):
@@ -111,14 +114,22 @@ class ResultView(unittest.TestCase):
             nonlocal swapped
             data = original_read(outputs, name, *args, **kwargs)
             if name == 'receipt.json' and not swapped:
+                if os.name == 'nt':
+                    with self.assertRaises(PermissionError): self.folder.rename(self.folder.with_name('HELD'))
+                    swapped = True
+                    return data
                 self.folder.rename(self.folder.with_name('HELD')); self.folder.symlink_to(foreign, target_is_directory=True); swapped = True
             return data
-        with patch.object(ChildOutputs, 'read', read), self.assertRaises(core.UserError): self.view()
+        with patch.object(ChildOutputs, 'read', read):
+            if os.name == 'nt': self.assertEqual(self.view()['result_sha256'], hashlib.sha256(self.original).hexdigest())
+            else:
+                with self.assertRaises(core.UserError): self.view()
+        self.assertTrue(swapped)
         self.assertEqual({p.name: p.read_bytes() for p in foreign.iterdir() if p.is_file()}, before)
 
     def test_leaf_replacement_during_read_refuses(self):
         real_fdopen = os.fdopen; path = self.folder / 'result.jsonl'; swapped = False
-        target_inode = path.stat().st_ino
+        test = self
         class Reader:
             def __init__(self, stream): self.stream = stream
             def __enter__(self): self.stream.__enter__(); return self
@@ -126,14 +137,22 @@ class ResultView(unittest.TestCase):
             def read(self, count):
                 nonlocal swapped
                 data = self.stream.read(count)
-                if not swapped:
-                    fresh = path.with_name('replacement'); fresh.write_bytes(b'[999]\n'); fresh.replace(path); swapped = True
+                if not swapped and data == test.original:
+                    fresh = path.with_name('replacement'); fresh.write_bytes(b'[999]\n')
+                    if os.name == 'nt':
+                        with test.assertRaises(PermissionError): fresh.replace(path)
+                    else: fresh.replace(path)
+                    swapped = True
                 return data
         def fdopen(fd, *args, **kwargs):
             stream = real_fdopen(fd, *args, **kwargs)
-            return Reader(stream) if os.fstat(fd).st_ino == target_inode else stream
-        with patch.object(os, 'fdopen', side_effect=fdopen), self.assertRaises(core.UserError): self.view()
+            return Reader(stream)
+        with patch.object(os, 'fdopen', side_effect=fdopen):
+            if os.name == 'nt': self.assertEqual(self.view()['result_sha256'], hashlib.sha256(self.original).hexdigest())
+            else:
+                with self.assertRaises(core.UserError): self.view()
         self.assertTrue(swapped)
+        if os.name == 'nt': self.assertEqual(path.read_bytes(), self.original)
 
     def test_result_replacement_after_hash_returns_verified_snapshot_only(self):
         original_sha = hashlib.sha256; path = self.folder / 'result.jsonl'; swapped = False
@@ -141,7 +160,11 @@ class ResultView(unittest.TestCase):
             nonlocal swapped
             result = original_sha(data, *args, **kwargs)
             if data == self.original and not swapped:
-                fresh = path.with_name('replacement'); fresh.write_bytes(b'[999,"FOREIGN",null,null,0]\n'); fresh.replace(path); swapped = True
+                fresh = path.with_name('replacement'); fresh.write_bytes(b'[999,"FOREIGN",null,null,0]\n')
+                if os.name == 'nt':
+                    with self.assertRaises(PermissionError): fresh.replace(path)
+                else: fresh.replace(path)
+                swapped = True
             return result
         with patch.object(sw.hashlib, 'sha256', side_effect=sha): result = self.view(limit=1)
         self.assertTrue(swapped); self.assertEqual(result['rows'][0][0], 0)
@@ -153,9 +176,16 @@ class ResultView(unittest.TestCase):
             nonlocal swapped
             result = original_sha(data, *args, **kwargs)
             if data == self.original and not swapped:
+                if os.name == 'nt':
+                    with self.assertRaises(PermissionError): self.folder.rename(self.folder.with_name('HELD'))
+                    swapped = True
+                    return result
                 self.folder.rename(self.folder.with_name('HELD')); self.folder.symlink_to(foreign, target_is_directory=True); swapped = True
             return result
-        with patch.object(sw.hashlib, 'sha256', side_effect=sha), self.assertRaises(core.UserError): self.view()
+        with patch.object(sw.hashlib, 'sha256', side_effect=sha):
+            if os.name == 'nt': self.assertEqual(self.view()['result_sha256'], original_sha(self.original).hexdigest())
+            else:
+                with self.assertRaises(core.UserError): self.view()
         self.assertTrue(swapped)
 
     def test_entire_stream_validated_even_when_bad_row_is_off_page(self):

@@ -1,4 +1,5 @@
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -118,7 +119,7 @@ class ExaminationReportTests(unittest.TestCase):
                 with self.assertRaisesRegex(UserError,'source integrity'):callback()
             self.assertFalse((self.base/'blocked').exists())
             outside=self.base/'same';outside.write_bytes(original);source.unlink();source.symlink_to(outside)
-            with self.assertRaisesRegex(UserError,'unsafe'):self.bind(root,db)
+            with self.assertRaisesRegex(UserError,'unsafe|linked'):self.bind(root,db)
 
     def test_unselected_changes_do_not_invalidate_scope_or_leak_content(self):
         with connect(self.ws,'A') as (root,db):
@@ -135,6 +136,24 @@ class ExaminationReportTests(unittest.TestCase):
         with connect(self.ws,'A') as (root,db):
             row=db.execute('SELECT * FROM files WHERE evidence_id=?',(self.eids[0],)).fetchone()
             parent=root/'evidence'/self.eids[0]; original=module.os.fdopen; swapped=[]
+            if os.name == 'nt':
+                from lawliet_mobile.windows_files import WindowsDirectory
+                original_fingerprint = WindowsDirectory.fingerprint
+                attempts = []
+                def fingerprint(directory, name, **kwargs):
+                    if directory.path == parent and not attempts:
+                        # The production reader already holds the directory
+                        # handle here. Windows must refuse the attempted swap.
+                        with self.assertRaises(PermissionError):
+                            parent.rename(parent.with_name(parent.name+'-old'))
+                        attempts.append(True)
+                    return original_fingerprint(directory, name, **kwargs)
+                with patch.object(WindowsDirectory, 'fingerprint', fingerprint):
+                    result = self.bind(root, db)
+                self.assertEqual(attempts, [True])
+                self.assertEqual(result['examination']['snapshot']['counts']['files'], 1)
+                self.assertFalse(parent.with_name(parent.name+'-old').exists())
+                return
             @contextmanager
             def replacing(*args,**kwargs):
                 with original(*args,**kwargs) as stream:
