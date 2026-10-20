@@ -131,10 +131,17 @@ def _combine_restart(initial, reopened):
     for key in ('case_id', 'corpus_sha256', 'field_fingerprint_sha256', 'report'):
         if initial.get(key) != reopened.get(key):
             raise ValueError('Persisted synthetic state changed after restart: '+key)
+    collection_verified = False
+    if 'collection_verification' in initial:
+        if (not initial['collection_verification'].get('ok')
+                or initial['collection_verification'] != reopened.get('collection_verification')):
+            raise ValueError('Collected evidence/report changed or transport reran after restart')
+        collection_verified = True
     return {'ok': True, 'initial_pid': initial['process_id'], 'reopened_pid': reopened['process_id'],
             'new_process': True, 'case_id': reopened['case_id'], 'report_id': reopened['report']['id'],
             'approval_persisted': reopened.get('approval_persisted') is True,
             'export_verified': reopened.get('export_verification', {}).get('ok') is True,
+            'collection_verified': collection_verified,
             'steps': reopened.get('steps', [])}
 
 
@@ -144,6 +151,7 @@ def main(argv=None):
     parser.add_argument('--worker', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--smoke-test', type=Path, help='Run synthetic native-window checks and write their JSON result; requires an empty workspace')
     parser.add_argument('--smoke-reopen', type=Path, help=argparse.SUPPRESS)
+    parser.add_argument('--smoke-collection', type=Path, help='Explicit synthetic ADB test script; only allowed with --smoke-test')
     parser.add_argument('--renderer', choices=('gtk','qt','cocoa','edgechromium'), help='Select an installed native web renderer')
     parser.add_argument('--hidden', action='store_true', help='Start hidden (used for CI desktop smoke tests)')
     args = parser.parse_args(argv)
@@ -152,6 +160,8 @@ def main(argv=None):
         return worker_main()
     if args.smoke_reopen and not args.smoke_test:
         parser.error('--smoke-reopen is only available with an explicit synthetic smoke test')
+    if args.smoke_collection and (not args.smoke_test or args.smoke_reopen):
+        parser.error('--smoke-collection requires an initial, explicit synthetic smoke test')
     try:
         import webview
     except ImportError:
@@ -180,6 +190,9 @@ def main(argv=None):
         fixture.update(phase='initial', export_path=str(fixture_root/'synthetic-report-export'),
                        nonexistent_path=str(fixture_root/'deliberately-missing-input.sqlite'))
         originals = _source_hashes(fixture)
+        if args.smoke_collection:
+            from .desktop_collection_smoke import prepare
+            fixture['collection'] = prepare(workspace, fixture_root, args.smoke_collection)
     outcome, completed = {}, threading.Event()
     def record(result):
         if isinstance(result, dict): outcome.update(result)
@@ -192,6 +205,8 @@ def main(argv=None):
         # picker, never the approval/export handlers or backend path checks.
         for key in ('export_path', 'nonexistent_path', 'missing_path'):
             if fixture.get(key): bridge._grants.add(str(Path(fixture[key]).resolve()))
+        if fixture.get('collection'):
+            bridge._grants.add(str(Path(fixture['collection']['export_path']).resolve()))
     # Deliberately in-memory HTML: no local static-file server exposes case data.
     webview.settings['ALLOW_DOWNLOADS'] = False
     webview.settings['ALLOW_FILE_URLS'] = False
@@ -206,7 +221,7 @@ def main(argv=None):
         else:
             # run_js avoids eval; the packaged script and bridge remain CSP-bound.
             window.run_js("(function start(){if(window.pywebview && window.lawlietSmoke){window.lawlietSmoke();}else{setTimeout(start,100);}})();")
-            if not completed.wait(180):
+            if not completed.wait(300 if fixture.get('collection') else 180):
                 record({'ok': False, 'error': 'Native-window smoke test timed out'})
         outcome.update(schema_version=2, process_id=os.getpid(), corpus_sha256=fixture['corpus_sha256'],
                        oracle_sha256=fixture['oracle_sha256'], fixture_path=fixture['path'],
@@ -229,6 +244,11 @@ def main(argv=None):
                 _check_selected_snapshot(fixture, outcome['selected_finding_snapshot'])
                 outcome['source_inspection_verification'] = _check_source_inspection(fixture, outcome['source_inspection'])
                 outcome['export_verification'] = _check_export(fixture, outcome)
+                if fixture.get('collection'):
+                    from .desktop_collection_smoke import check
+                    outcome['collection_verification'] = check(workspace, fixture['collection'], outcome['collection'])
+                    if fixture.get('previous') and outcome['collection_verification'] != fixture['previous']['collection_verification']:
+                        raise ValueError('Collected evidence/report or device calls changed after restart')
         except Exception as error:
             outcome.update(ok=False, error=str(error))
         args.smoke_test.parent.mkdir(parents=True, exist_ok=True)

@@ -22,6 +22,8 @@ def main():
     args = sys.argv[1:]
     with Path(__file__).with_suffix('.calls.jsonl').open('a') as log:
         log.write(json.dumps(args) + '\n')
+    if args == ['devices', '-l']:
+        return 'List of devices attached\nLAWLIET-SYNTHETIC device product:fixture model:Synthetic_validation_fixture\n'
     if len(args) < 3 or args[0] != '-s' or args[1] not in {'LAWLIET-SYNTHETIC', 'LAWLIET-DENIED', 'LAWLIET-PARTIAL'}:
         raise ValueError('Only explicit synthetic device serials are accepted')
     serial, args = args[1], args[2:]
@@ -43,7 +45,7 @@ def main():
                 'undated fixture text must not become an event\n')
     if len(args) == 2 and args[0] == 'bugreport':
         if serial == 'LAWLIET-PARTIAL':
-            sys.stderr.write('Synthetic bugreport collection failure\n')
+            sys.stderr.buffer.write(b'Synthetic bugreport collection failure\n')
             raise SystemExit(9)
         with zipfile.ZipFile(args[1], 'w') as archive:
             archive.writestr('main_entry.txt', 'bugreport-fixture.txt')
@@ -52,7 +54,7 @@ def main():
     if args[:2] == ['backup', '-f']:
         if args[3:] != ['-noapk', '-nocompress', 'com.android.providers.telephony']:
             raise ValueError('Unexpected legacy backup scope')
-        sys.stderr.write('Synthetic legacy backup unavailable on this device\n')
+        sys.stderr.buffer.write(b'Synthetic legacy backup unavailable on this device\n')
         raise SystemExit(1)
     if args == ['shell', 'find /sdcard/Android/.Trash -type f -print0']:
         return TRASH_PATH + '\0'
@@ -99,4 +101,4 @@ def main():
 
 
 if __name__ == '__main__':
-    sys.stdout.write(main())
+    sys.stdout.buffer.write(main().encode('utf-8'))

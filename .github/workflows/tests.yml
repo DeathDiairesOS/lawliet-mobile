@@ -1,6 +1,24 @@
 name: CLI checks
 on: [push, pull_request]
 jobs:
+  windows-workflow:
+    name: Windows acquisition and integrity
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: python -m pip install tzdata
+      - name: Exercise real synthetic collection subprocesses
+        run: python -m unittest tests.test_collection_portable_e2e tests.test_provider_sms_staging tests.test_provider_contacts_boundaries -v
+      - name: Verify host evidence staging and parser contracts
+        if: ${{ !cancelled() }}
+        run: python -m unittest tests.test_container_runner tests.test_sqlite_container_staging tests.test_native_container_review_boundary tests.test_report_container -v
+      - name: Verify secret transport and owned process cleanup
+        if: ${{ !cancelled() }}
+        run: python -m unittest tests.test_signal_customer_intake tests.test_runner_windows -v
   test:
     timeout-minutes: 20
     # Windows portability remains experimental; retain visible diagnostics.
@@ -28,7 +46,7 @@ jobs:
         run: python -m unittest tests.test_runner_windows tests.test_windows_file_boundaries tests.test_mulder_runtime tests.test_mulder -v
       - name: Check acquisition and provider evidence boundaries
         if: ${{ !cancelled() }}
-        run: python -m unittest tests.test_agent_collection tests.test_android_workflow tests.test_contacts_cli_scope tests.test_nonroot tests.test_phone_assessment_scope tests.test_provider_contacts tests.test_provider_contacts_boundaries tests.test_provider_sms tests.test_provider_sms_staging tests.test_trash_collection -v
+        run: python -m unittest tests.test_agent_collection tests.test_android_workflow tests.test_collection_portable_e2e tests.test_contacts_cli_scope tests.test_nonroot tests.test_phone_assessment_scope tests.test_provider_contacts tests.test_provider_contacts_boundaries tests.test_provider_sms tests.test_provider_sms_staging tests.test_trash_collection -v
       - name: Check host staging and Linux worker boundaries
         if: ${{ !cancelled() }}
         run: python -m unittest tests.test_container_runner tests.test_sqlite_container_staging tests.test_native_container_review_boundary tests.test_report_container tests.test_native_container_worker tests.test_native_container_codec_worker tests.test_browser_download_residual -v

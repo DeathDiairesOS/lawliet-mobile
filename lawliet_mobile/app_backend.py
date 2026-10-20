@@ -428,7 +428,9 @@ def handle(workspace, request):
             if platform=='android' and request.get('profile')=='private-apps':
                 result=collect_private_apps(root,db,workspace,request['serial'],3600,budget)
             elif platform=='android':
-                result=collect_android(root,db,workspace,request['serial'],request.get('profile','messages'),request.get('pulls',[]),3600,budget,
+                profile=request.get('profile','messages')
+                timeout=900 if profile in {'contacts-provider','sms-provider'} else 3600
+                result=collect_android(root,db,workspace,request['serial'],profile,request.get('pulls',[]),timeout,budget,
                                        request.get('max_sms',1000),request.get('android_user'),request.get('sms_prefix'))
             elif platform=='ios': result=collect(root,db,workspace,platform,request['serial'],3600,budget)
             else: raise UserError('Choose Android or iOS.')

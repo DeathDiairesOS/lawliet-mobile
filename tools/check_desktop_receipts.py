@@ -55,6 +55,15 @@ def check_receipts(directory: Path, commit: str):
             pids = [restart.get(k) for k in ("initial_pid", "reopened_pid")]
             if any(type(pid) is not int or pid <= 0 for pid in pids) or pids[0] == pids[1]:
                 errors.append(f"{host}: restart did not record two different process IDs")
+            collection = result.get("collection_verification", {})
+            for key in ("ok", "source_hashes_verified", "report_verified"):
+                if collection.get(key) is not True:
+                    errors.append(f"{host}: collected evidence check {key} did not pass")
+            if (collection.get("profiles") != ["sms-provider", "contacts-provider", "files", "triage", "trash-photos"]
+                    or collection.get("records_checked") != 10
+                    or restart.get("collection_verified") is not True
+                    or not SHA256.fullmatch(str(collection.get("field_fingerprint_sha256", "")))):
+                errors.append(f"{host}: five-method collection, exact records or persistence missing")
             hosts[host] = {
                 "environment": env,
                 "corpus_sha256": result.get("corpus_sha256"),
@@ -64,15 +73,18 @@ def check_receipts(directory: Path, commit: str):
                 "comparison": comparison,
                 "restart": restart,
                 "originals_unchanged": result.get("originals_unchanged"),
+                "collection": collection,
             }
         except (OSError, ValueError, TypeError, AttributeError) as error:
             errors.append(f"{host}: cannot validate receipt: {error}")
     for key in ("corpus_sha256", "oracle_sha256", "field_fingerprint_sha256"):
         if len(hosts) != len(HOSTS) or len({h.get(key) for h in hosts.values()}) != 1:
             errors.append(f"Native hosts disagree on {key}, or a host is missing")
+    if len({h["collection"].get("field_fingerprint_sha256") for h in hosts.values()}) != 1:
+        errors.append("Native hosts disagree on acquired record fields")
     return {
         "schema_version": 1, "ok": not errors, "commit": commit,
-        "scope": "Synthetic Android import, native parsing, desktop review and local report export",
+        "scope": "Synthetic Android subprocess acquisition, import, native parsing, desktop review and local report export",
         "excludes": ["physical acquisition", "external parsers", "AI reasoning", "independent human examiner sign-off"],
         "hosts": hosts, "errors": errors,
     }

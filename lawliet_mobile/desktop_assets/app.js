@@ -153,7 +153,7 @@
   // synthetic native-window qualification. Normal sessions have no fixture.
   window.lawlietSmoke=async()=>{
     const steps=[];
-    let outcome,fixture,phase='initial',sourceInspection,selectedFindingSnapshot;
+    let outcome,fixture,phase='initial',sourceInspection,selectedFindingSnapshot,collection;
     const literal='<img src=x onerror="window.evidenceExecuted=true">';
     const examiner='Synthetic QA examiner';
     const findingNote='SYNTHETIC TEST ONLY: literal message content was inspected against its retained SQLite record; this does not establish a real-world event.';
@@ -177,6 +177,65 @@
     async function checkSQLite(){await go('files');const logicalPath=fixture.oracle.records.find(record=>record.category==='messages').logical_path;const row=[...$('view').querySelectorAll('tbody tr')].find(node=>node.firstElementChild?.textContent===logicalPath);assert(row,'Retained SQLite source is absent from files view');await click(btn('SQLite',row),'SQLite dialog');control('Bounded query').value='SELECT _id, body FROM sms ORDER BY _id';await submit('read-only SQLite query');assert(document.querySelector('.modal h2')?.textContent==='SQLite query result','SQLite query failed: '+$('notice').textContent);const queried=JSON.parse(document.querySelector('.modal pre').textContent);const bodies=fixture.oracle.records.filter(record=>record.category==='messages').map(record=>record.body).sort();assert(queried.status==='complete'&&JSON.stringify(queried.preview.rows.map(row=>row[1]).sort())===JSON.stringify(bodies),'SQLite working-copy query differs from independent SMS oracle, including WAL-only message');assert(!window.evidenceExecuted&&!document.querySelector('.modal img[onerror]'),'SQLite result executed evidence');steps.push({step:'sqlite_query_ui',rows:queried.preview.rows.length,columns:queried.preview.columns,result_sha256:queried.preview.result_sha256});await closeResult();}
     async function checkMedia(){await go('artifacts');await selectFilter('Artifact category','media');const row=$('view').querySelector('.artifact-table tbody tr');assert(row,'Synthetic media not displayed');row.click();await waitFor(()=>document.querySelector('.preview-image')?.complete&&document.querySelector('.preview-image')?.naturalWidth===1,'automatic verified media preview');steps.push({step:'automatic_media_ui',width:document.querySelector('.preview-image').naturalWidth,source_sha256:fixture.oracle.records.find(record=>record.category==='media').source_sha256});}
     async function openPersistedReport(report){await go('reports');const row=[...$('view').querySelectorAll('tbody tr')].find(node=>node.firstElementChild?.textContent===report.id);assert(row,'Persisted report is absent from Reports');row.click();await waitFor(()=>S.pending===0&&document.querySelector('.report-text'),'open persisted report');assert(document.querySelector('.report-text').textContent.includes(findingNote),'Persisted report lost the examiner finding');const review=await api('customer-report-review',{bundle_id:report.id,kind:'original',expected_manifest_sha256:report.manifest_sha256});assert(review.approval&&review.approval.reviewer===examiner&&!btn('Export approved report').disabled,'Persisted approval was not verified or export did not become available');steps.push({step:'report_reopened_ui',id:report.id,approval_persisted:true});}
+    async function collectionWorkflow(){
+      const c=fixture.collection;
+      if(!c)return;
+      let runs=[],selected,report;
+      if(phase==='reopen'){
+        await pickCase(c.case_id);
+        runs=fixture.previous.collection.collections;
+        selected=fixture.previous.collection.selected;
+        report=fixture.previous.collection.report;
+      }else{
+        await create(c.case_id);
+        for(const profile of c.profiles){
+          await go('acquisition');await click(btn('Detect connected devices'),'detect synthetic device');
+          const device=[...$('view').querySelectorAll('tbody tr')].find(row=>row.textContent.includes(c.serial));
+          assert(device,'Synthetic device discovery failed');
+          await click(btn('Choose collection',device),'choose scoped acquisition');
+          control('Acquisition method').value=profile;
+          if(profile==='files')control('Paths (Files method only)').value=c.pull;
+          document.querySelector('.modal .check-row input').checked=true;
+          await submit('collect '+profile);
+          assert(document.querySelector('.modal h2')?.textContent==='Collection & processing result','Collection result missing: '+$('notice').textContent);
+          const result=JSON.parse(document.querySelector('.modal pre').textContent);
+          assert(result.status==='complete'&&result.evidence_id,'Collection or automatic parsing failed: '+json(result));
+          runs.push({profile,result});steps.push({step:'collection_ui',profile,status:result.status,evidence_id:result.evidence_id});
+          await closeResult();
+        }
+      }
+      const acquired=await records(c.case_id);
+      assert(acquired.length===10,'Expected ten collected observations, received '+acquired.length);
+      await go('artifacts');await selectFilter('Artifact category','messages');
+      document.querySelector('[aria-label="Search parsed evidence"]').value='blue station';await click(btn('Search'),'search acquired message');
+      const rows=[...$('view').querySelectorAll('.artifact-table tbody tr')];
+      assert(rows.length===1&&rows[0].textContent.includes(c.message),'Collected message was not searchable in the native UI');
+      rows[0].click();await waitFor(()=>S.pending===0&&document.querySelector('.inspector')?.textContent.includes(c.message),'collected source inspector');
+      const exact=acquired.find(row=>row.body===c.message);
+      assert(exact&&document.querySelector('.inspector').textContent.includes(exact.source_ref),'Collected source reference missing');
+      if(phase==='initial'){
+        await click(btn('Save finding',document.querySelector('.inspector')),'save acquired finding');
+        control('Examiner').value=examiner;control('Interpretation / note').value=c.note;await submit('save acquired finding form');
+        const finding=(await api('findings',{offset:0})).findings.find(item=>item.note===c.note);
+        assert(finding&&finding.snapshot.id===exact.id,'Acquired finding lost selected record');selected=finding.snapshot;
+        await go('findings');const check=document.querySelector('[aria-label="Select finding '+finding.id+'"]');assert(check,'Acquired finding selection missing');check.checked=true;check.dispatchEvent(new Event('change'));
+        await click(btn('Prepare report from selected'),'acquired report dialog');control('Report objective').value='SYNTHETIC ONLY: verify collection, parsing and traceable report.';await submit('prepare acquired report');
+        assert(document.querySelector('.report-text')?.textContent.includes(c.note)&&btn('Export approved report').disabled,'Acquired report must await examiner approval');
+        const entry=(await api('report-history',{offset:0})).items.find(item=>item.kind==='original');const preview=await api('desktop-report',{bundle_id:entry.id,kind:entry.kind});report={id:entry.id,manifest_sha256:preview.manifest_sha256};
+        control('Reviewer',$('view')).value=examiner;control('Approval declaration',$('view')).value='SYNTHETIC ONLY: source and exact report reviewed; no customer release.';$('view').querySelector('.check-row input').checked=true;
+        await click(btn('Record approval for these bytes'),'approve synthetic collection report');smokePaths={save:c.export_path};await click(btn('Export approved report'),'export acquired report');
+        assert(document.querySelector('.modal h2')?.textContent==='Local report release receipt','Acquired report export failed');await closeResult();
+      }else{
+        await go('findings');assert($('view').textContent.includes(c.note),'Collected finding disappeared after restart');
+        const finding=(await api('findings',{offset:0})).findings.find(item=>item.note===c.note);assert(json(finding.snapshot)===json(selected),'Persisted collected finding changed');
+      }
+      await go('reports');const reportRow=[...$('view').querySelectorAll('tbody tr')].find(row=>row.firstElementChild?.textContent===report.id);assert(reportRow,'Collected report missing');reportRow.click();await waitFor(()=>S.pending===0&&document.querySelector('.report-text'),'open collected report');
+      assert(document.querySelector('.report-text').textContent.includes(c.note)&&!btn('Export approved report').disabled,'Collected report or approval missing');
+      const integrity=await api('verify');assert(integrity.ok,'Collected evidence failed verification');
+      collection={case_id:c.case_id,collections:runs,records:acquired,selected,report};
+      steps.push({step:'collection_report_ui',phase,records:acquired.length,source_sha256:exact.source_sha256,report_id:report.id});
+      await pickCase(fixture.case_id);
+    }
     try{
       await waitFor(()=>S.info&&S.pending===0,'application initialization');
       fixture=await api('desktop-smoke-fixture',{},'');phase=fixture.phase;
@@ -205,8 +264,9 @@
         for(const view of ['acquisition','agent','mvt']){await go(view);assert($('view').children.length,'Empty view: '+view);steps.push({step:'render_without_collection',view});}
         await openPersistedReport(report);
       }
+      await collectionWorkflow();
       const integrity=await api('verify',{},fixture.case_id);assert(integrity.ok,'Synthetic case integrity check failed');assert(!window.evidenceExecuted,'Evidence executed as a script');steps.push({step:'integrity',result:integrity});
-      outcome={ok:true,case_id:fixture.case_id,phase,steps,actual_records:actualRecords,missing_actual_records:missingActualRecords,source_inspection:sourceInspection,selected_finding_snapshot:selectedFindingSnapshot,report,approval_persisted:true,native_picker:'Exact synthetic paths substituted; all import/review/approval/export handlers exercised.',scope:'Frozen synthetic corpus only. Explicit synthetic examiner approval and local export; no real evidence, devices, external models or customer delivery.'};
+      outcome={ok:true,case_id:fixture.case_id,phase,steps,collection,actual_records:actualRecords,missing_actual_records:missingActualRecords,source_inspection:sourceInspection,selected_finding_snapshot:selectedFindingSnapshot,report,approval_persisted:true,native_picker:'Exact synthetic paths substituted; all import/review/approval/export handlers exercised.',scope:'Frozen synthetic corpus only. Explicit synthetic examiner approval and local export; no real evidence, devices, external models or customer delivery.'};
     }catch(error){outcome={ok:false,error:error.message||text(error),phase,steps};notice(outcome.error,true);}
     finally{smokePaths=null;}
     await api('desktop-smoke-result',{result:outcome},'');return outcome;

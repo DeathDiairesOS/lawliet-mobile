@@ -133,7 +133,9 @@ jobs:
           executable = shutil.which('lawliet-desktop')
           if not executable:
               raise SystemExit('Installed lawliet-desktop entry point was not found')
-          command = [executable, '--workspace', str(workspace), '--smoke-test', str(result), '--renderer', renderer]
+          transport = Path(os.environ['GITHUB_WORKSPACE']) / 'tests/fixtures/collection_adb.py'
+          command = [executable, '--workspace', str(workspace), '--smoke-test', str(result),
+                     '--smoke-collection', str(transport), '--renderer', renderer]
           if sys.platform.startswith('linux'):
               command = ['xvfb-run', '--auto-servernum', '--server-args=-screen 0 1360x900x24', *command]
           # Real native windows and renderers, including a fresh process restart.
