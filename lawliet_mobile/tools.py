@@ -50,7 +50,7 @@ def configuration(workspace):
     if not path.exists():
         return {}
     try:
-        value = json.loads(path.read_text())
+        value = json.loads(path.read_text(encoding='utf-8'))
         if not isinstance(value, dict):
             raise ValueError("expected an object")
         return value
@@ -74,7 +74,7 @@ def configure(workspace, name, path, python=None):
         settings[name] = str(target)
     destination = config_path(workspace)
     destination.parent.mkdir(parents=True, exist_ok=True)
-    destination.write_text(json_text(settings) + "\n")
+    destination.write_text(json_text(settings) + "\n", encoding='utf-8')
     return {"tool": name, "path": str(target), "configuration": settings[name]}
 
 
@@ -549,7 +549,7 @@ def devices(workspace):
             if run["returncode"]:
                 result.append({"platform": platform, "status": "discovery_failed", "tool": name})
                 continue
-            lines = (Path(tmp) / name).read_text(errors="replace").splitlines()
+            lines = (Path(tmp) / name).read_text(encoding="utf-8", errors="replace").splitlines()
             found = 0
             for line in lines:
                 if not line.strip() or line.startswith("List of devices"):
@@ -567,9 +567,26 @@ def collect(root, db, workspace, platform, serial, timeout=900, max_bytes=20 * 1
         raise UserError("Collection platform must be ios or android.")
     if not serial or serial.startswith("-") or any(c.isspace() or c in "/\\" for c in serial):
         raise UserError("Supply a valid device serial/UDID from devices.")
+    from .provider_contacts import _create_collection
     run_id = uuid.uuid4().hex[:12]
-    folder = root / "collections" / run_id
-    folder.mkdir(parents=True)
+    try:
+        folder = _create_collection(root, run_id)
+    except (OSError, UserError) as exc:
+        raise UserError("Collection staging cannot be created safely; no device command was run.") from exc
+    if os.name == 'nt':
+        from .windows_files import WindowsDirectory
+        context = WindowsDirectory(folder)
+    else:
+        context = contextlib.nullcontext()
+    # Windows retains the validated ancestry through backup, intake and final
+    # metadata publication. The collector does not grant arbitrary child output
+    # paths trusted status; evidence intake still rejects linked payloads.
+    with context:
+        return _collect_into(root, db, workspace, platform, serial, timeout, max_bytes, run_id, folder)
+
+
+def _collect_into(root, db, workspace, platform, serial, timeout, max_bytes, run_id, folder):
+    from .provider_sms import _write_manifest
     commands, errors, evidence_id = [], [], None
     audit(db, "collection.started", {"collection_id": run_id, "platform": platform, "serial": serial,
                                          "method": "logical backup" if platform == "ios" else "ADB triage", "device_changes": "Live collection changes device state; command logs retained."})
@@ -613,7 +630,7 @@ def collect(root, db, workspace, platform, serial, timeout=900, max_bytes=20 * 1
             # Keep triage output as collected evidence; it is not a full app-data extraction.
             if not any(r["returncode"] == 0 for r in commands):
                 raise UserError("Every Android collection command failed. Check USB debugging and host authorization.")
-            (folder / "collection.json").write_text(json_text({"platform": platform, "serial": serial, "method": "ADB triage", "commands": commands, "errors": errors}) + "\n")
+            _write_manifest(folder / "collection.json", {"platform": platform, "serial": serial, "method": "ADB triage", "commands": commands, "errors": errors})
             evidence_id, _, _ = import_evidence(root, db, folder, "android", f"Android triage · {serial}", max_bytes=max_bytes)
         status = "partial" if errors else "complete"
     except BaseException as exc:
@@ -623,7 +640,18 @@ def collect(root, db, workspace, platform, serial, timeout=900, max_bytes=20 * 1
         errors.append({"error": str(exc)})
         raise
     finally:
-        (folder / "collection.json").write_text(json_text({"collection_id": run_id, "platform": platform, "serial": serial, "status": status, "commands": commands, "errors": errors, "evidence_id": evidence_id}) + "\n")
+        try:
+            _write_manifest(folder / "collection.json", {"collection_id": run_id, "platform": platform, "serial": serial, "status": status, "commands": commands, "errors": errors, "evidence_id": evidence_id})
+        except Exception as exc:
+            # A metadata publication failure must not leave a started-only
+            # attempt. Preserve the prior collection outcome and evidence ID:
+            # failure to write this receipt does not decide backup validity.
+            errors.append({"error": "Collection receipt publication failed: " + str(exc)})
+            audit(db, "collection.finished", {"collection_id": run_id, "status": "failed",
+                "collection_status": status, "receipt_status": "failed",
+                "evidence_id": evidence_id, "errors": errors})
+            db.commit()
+            raise
         audit(db, "collection.finished", {"collection_id": run_id, "status": status, "evidence_id": evidence_id, "errors": errors})
         db.commit()
     return {"collection_id": run_id, "status": status, "evidence_id": evidence_id, "path": str(folder), "errors": errors}

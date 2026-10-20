@@ -12,7 +12,7 @@ jobs:
           python-version: '3.11'
       - run: python -m pip install tzdata
       - name: Exercise real synthetic collection subprocesses
-        run: python -m unittest tests.test_collection_portable_e2e tests.test_provider_sms_staging tests.test_provider_contacts_boundaries -v
+        run: python -m unittest tests.test_collection_portable_e2e tests.test_ios_collection_portable tests.test_provider_sms_staging tests.test_provider_contacts_boundaries -v
       - name: Verify host evidence staging and parser contracts
         if: ${{ !cancelled() }}
         run: python -m unittest tests.test_container_runner tests.test_sqlite_container_staging tests.test_native_container_review_boundary tests.test_report_container -v
