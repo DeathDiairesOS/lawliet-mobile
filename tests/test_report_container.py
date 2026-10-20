@@ -38,7 +38,7 @@ class Reports(unittest.TestCase):
    with core.connect(self.ws,'A') as (root,db):parsed.import_parsed(root,db,self.source,'jsonl');host=[tuple(row) for row in db.execute('SELECT * FROM artifacts')]
    with core.connect(self.ws,'B') as (root,db):result=self.contained(root,db);contained=[tuple(row) for row in db.execute('SELECT * FROM artifacts')];self.assertEqual(host,contained);self.assertEqual(result['records'],1)
  def test_tsv_preserves_filename_columns_raw_values_and_header_only_zero(self):
-  source=self.base/'Unknown.tsv';source.write_text('B\tA\nhello\t世界\n')
+  source=self.base/'Unknown.tsv';source.write_text('B\tA\nhello\t世界\n',encoding='utf-8')
   with core.connect(self.ws,'A') as (root,db):
    result=self.contained(root,db,source,'tsv');artifact=db.execute('SELECT * FROM artifacts').fetchone();data=json.loads(artifact['data']);self.assertEqual(data['_leapp_columns'],['B','A']);self.assertEqual(data['_import_report']['filename'],'Unknown.tsv');self.assertEqual(result['records'],1)
    source.write_text('B\tA\n');empty=self.contained(root,db,source,'tsv');self.assertEqual(empty['records'],0);self.assertEqual(db.execute('SELECT status FROM runs WHERE id=?',(empty['run_id'],)).fetchone()[0],'complete')

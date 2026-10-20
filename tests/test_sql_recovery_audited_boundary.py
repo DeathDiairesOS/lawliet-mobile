@@ -182,9 +182,11 @@ class RecoveryBoundary(unittest.TestCase):
         self.db.execute("DELETE FROM audit WHERE action='sqlite_query.started'")
         self.db.execute('UPDATE runs SET detail=?', (core.json_text(self.initial),))
         core.audit(self.db, 'sqlite_query.started', self.claim)
+        runtime_cfg = {**self.cfg, **{key: str(Path(self.cfg[key]).resolve())
+                                    for key in ('socket', 'docker')}}
         with patch.object(Path, 'is_file', return_value=True), patch.object(Path, 'stat', return_value=SimpleNamespace(st_mode=stat.S_IFSOCK)), patch.object(sc.os, 'access', return_value=True), patch.dict(sc.os.environ, {'LAWLIET_CONTAINER_SOCKET': self.cfg['socket']}), patch.object(sc, 'inventory', return_value=['e' * 64]) as daemon, patch.object(sc, 'owned_state', return_value=self.live):
             with self.assertRaisesRegex(core.UserError, 'active or uncertain'): self.recover()
-            daemon.assert_called_once_with(self.cfg, self.expected)
+            daemon.assert_called_once_with(runtime_cfg, self.expected)
 
     def test_current_configured_rejects_old_bootstrap_before_runtime_probe(self):
         from lawliet_mobile import tools

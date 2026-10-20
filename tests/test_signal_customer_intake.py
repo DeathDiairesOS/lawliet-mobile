@@ -97,21 +97,47 @@ assert kernel.IsProcessInJob(kernel.GetCurrentProcess(),None,ctypes.byref(in_job
 
     @unittest.skipUnless(os.name == 'nt', 'Requires real Windows Job Object termination')
     def test_windows_decoder_descendants_are_stopped_before_output_inspection(self):
-        from lawliet_mobile.runner_windows import process_running
+        import ctypes
+        from ctypes import wintypes
         from lawliet_mobile.signal_backup import _check_output
+        from lawliet_mobile.tools import storage_guard
+        api = ctypes.WinDLL('kernel32', use_last_error=True)
+        api.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+        api.OpenProcess.restype = wintypes.HANDLE
+        api.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        api.WaitForSingleObject.restype = wintypes.DWORD
+        api.CloseHandle.argtypes = [wintypes.HANDLE]
         ready = self.base/'descendant.pid'
+        release = self.base/'descendant.release'
+        handles = []
         self.decoder("import subprocess\n"
             "descendant=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)'])\n"
-            "pathlib.Path(" + repr(str(ready)) + ").write_text(str(descendant.pid))")
+            "pathlib.Path(" + repr(str(ready)) + ").write_text(str(descendant.pid))\n"
+            "while not pathlib.Path(" + repr(str(release)) + ").exists():time.sleep(.02)")
+        def monitored_guard(*args, **kwargs):
+            check = storage_guard(*args, **kwargs)
+            def guard():
+                check()
+                if ready.exists() and not handles:
+                    # Retain identity while the decoder is waiting. Looking up
+                    # an already-dead PID can observe an unrelated reused PID.
+                    handle = api.OpenProcess(0x00100000, False, int(ready.read_text()))
+                    self.assertTrue(handle)
+                    self.addCleanup(api.CloseHandle, handle)
+                    handles.append(handle)
+                    self.assertEqual(api.WaitForSingleObject(handle, 0), 258)
+                    release.write_text('continue')
+            return guard
         checked = []
         def inspect(output):
-            self.assertTrue(ready.is_file())
-            self.assertFalse(process_running(int(ready.read_text())),
-                             'Decoder descendant survived until output inspection')
+            self.assertEqual(len(handles), 1)
+            self.assertEqual(api.WaitForSingleObject(handles[0], 0), 0,
+                             'Exact decoder descendant survived until output inspection')
             checked.append(True)
             return _check_output(output)
         with connect(self.workspace, 'signal') as (root, db):
-            with patch('lawliet_mobile.signal_backup._check_output', side_effect=inspect):
+            with patch('lawliet_mobile.signal_backup._check_output', side_effect=inspect), \
+                    patch('lawliet_mobile.signal_backup.storage_guard', side_effect=monitored_guard):
                 result = decrypt_signal(root, db, self.workspace, self.backup, KEY, timeout=10)
             self.assertEqual(result['status'], 'complete')
             self.assertEqual(checked, [True])
