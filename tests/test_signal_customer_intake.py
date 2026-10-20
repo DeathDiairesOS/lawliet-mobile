@@ -52,6 +52,70 @@ con.close()
 """ + operation + '\n')
         configure(self.workspace, 'signalbackup-tools', tool, sys.executable)
 
+    @unittest.skipUnless(os.name == 'nt', 'Requires the real Windows CRT console and Job Object')
+    def test_windows_crt_prompt_private_console_job_and_no_secret_persistence(self):
+        # ctypes calls the same CRT _getch contract used by upstream, not a
+        # simulated stdin-only protocol. The oracle contains a digest, not key.
+        import hashlib
+        self.decoder()
+        tool = self.base/'decoder.py'
+        secret_read = """import ctypes, hashlib
+from ctypes import wintypes
+crt=ctypes.CDLL('msvcrt')
+crt._getch.argtypes=[];crt._getch.restype=ctypes.c_int
+characters=[]
+while True:
+    value=crt._getch()
+    if value==13:break
+    characters.append(chr(value))
+secret=''.join(characters)
+assert hashlib.sha256(secret.encode()).hexdigest()==EXPECTED_DIGEST
+assert secret not in str(dict(os.environ))
+kernel=ctypes.WinDLL('kernel32');user=ctypes.WinDLL('user32')
+kernel.GetConsoleWindow.restype=wintypes.HWND
+user.IsWindowVisible.argtypes=[wintypes.HWND];user.IsWindowVisible.restype=wintypes.BOOL
+assert not user.IsWindowVisible(kernel.GetConsoleWindow())
+processes=(wintypes.DWORD*4)()
+kernel.GetConsoleProcessList.argtypes=[ctypes.POINTER(wintypes.DWORD),wintypes.DWORD]
+count=kernel.GetConsoleProcessList(processes,4)
+assert count==2 and os.getpid() in processes[:count] and os.getppid() in processes[:count]
+in_job=wintypes.BOOL()
+kernel.IsProcessInJob.argtypes=[wintypes.HANDLE,wintypes.HANDLE,ctypes.POINTER(wintypes.BOOL)]
+kernel.GetCurrentProcess.restype=wintypes.HANDLE
+assert kernel.IsProcessInJob(kernel.GetCurrentProcess(),None,ctypes.byref(in_job)) and in_job.value
+""".replace('EXPECTED_DIGEST', repr(hashlib.sha256(KEY.encode()).hexdigest()))
+        tool.write_text(tool.read_text().replace('secret = input()', secret_read))
+        with connect(self.workspace, 'signal') as (root, db):
+            result=decrypt_signal(root,db,self.workspace,self.backup,KEY,timeout=10)
+            self.assertEqual(result['status'],'complete')
+            detail=json.loads(db.execute('SELECT detail FROM runs WHERE id=?',(result['run_id'],)).fetchone()[0])
+            self.assertEqual(detail['passphrase_transport'],'private Windows console via owned anonymous pipe')
+            self.assertTrue(detail['runner_ownership'])
+            self.assertTrue(detail['process_tree_terminated_before_import'])
+            for file in root.rglob('*'):
+                if file.is_file():self.assertNotIn(KEY.encode(),file.read_bytes(),str(file))
+
+    @unittest.skipUnless(os.name == 'nt', 'Requires real Windows Job Object termination')
+    def test_windows_decoder_descendants_are_stopped_before_output_inspection(self):
+        from lawliet_mobile.runner_windows import process_running
+        from lawliet_mobile.signal_backup import _check_output
+        ready = self.base/'descendant.pid'
+        self.decoder("import subprocess\n"
+            "descendant=subprocess.Popen([sys.executable,'-c','import time;time.sleep(120)'])\n"
+            "pathlib.Path(" + repr(str(ready)) + ").write_text(str(descendant.pid))")
+        checked = []
+        def inspect(output):
+            self.assertTrue(ready.is_file())
+            self.assertFalse(process_running(int(ready.read_text())),
+                             'Decoder descendant survived until output inspection')
+            checked.append(True)
+            return _check_output(output)
+        with connect(self.workspace, 'signal') as (root, db):
+            with patch('lawliet_mobile.signal_backup._check_output', side_effect=inspect):
+                result = decrypt_signal(root, db, self.workspace, self.backup, KEY, timeout=10)
+            self.assertEqual(result['status'], 'complete')
+            self.assertEqual(checked, [True])
+
     def test_preflight_is_read_only_and_does_not_authenticate_opaque_file(self):
         with patch('lawliet_mobile.signal_backup.command', side_effect=UserError('missing')):
             result = signal_backup_preflight(self.backup, self.workspace)

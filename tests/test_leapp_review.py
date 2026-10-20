@@ -130,7 +130,7 @@ class LeappReviewTests(unittest.TestCase):
             self.assertIsNone(leapp_artifact('Unrecognized report',fields,'e')[1])
         folder=self.base/'activity';folder.mkdir()
         for name,fields in [('Recent Activity',recent),('Usage Stats',usage)]:
-            with (folder/(name+'.tsv')).open('w') as stream:
+            with (folder/(name+'.tsv')).open('w', newline='', encoding='utf-8') as stream:
                 writer=csv.DictWriter(stream,fieldnames=fields,delimiter='\t')
                 writer.writeheader();writer.writerow(fields)
         imported=self.call('import',path=str(folder),format='folder')
@@ -163,7 +163,7 @@ class LeappReviewTests(unittest.TestCase):
         self.assertNotEqual(message['conversation_id'],other[5]['message']['conversation_id'])
         folder=self.base/'discord';folder.mkdir()
         for name,fields in [('discordChats',original),('Discord - Cached Messages (API cache)',cached)]:
-            with (folder/(name+'.tsv')).open('w') as stream:
+            with (folder/(name+'.tsv')).open('w', newline='', encoding='utf-8') as stream:
                 writer=csv.DictWriter(stream,fieldnames=fields,delimiter='\t');writer.writeheader();writer.writerow(fields)
         imported=self.call('import',path=str(folder),format='folder')
         rows=self.call('records',evidence=imported['evidence_id'],parser='import/leapp',category='messages',query='Meeting')['records']

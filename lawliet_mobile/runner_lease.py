@@ -124,6 +124,9 @@ def stop(child,alive):
   try:child.wait(timeout=5)
   except subprocess.TimeoutExpired:child.kill()
  child.wait()
+ if os.name=='nt':
+  from .runner_windows import wait_stopped
+  wait_stopped(child)
 def guardian(lease_fd,alive_fd,config_fd):
  import select
  with os.fdopen(config_fd,'rb') as stream:raw=stream.read(16385)

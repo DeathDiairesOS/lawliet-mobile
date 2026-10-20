@@ -15,6 +15,24 @@ from lawliet_mobile import runner_lease
 from lawliet_mobile.core import UserError, connect, create_case
 
 
+class JobCompletionTests(unittest.TestCase):
+    def test_completion_error_and_timeout_cannot_promote_output(self):
+        from types import SimpleNamespace
+        from unittest.mock import Mock
+        from lawliet_mobile.runner_windows import wait_stopped
+        for finished, errors in ((False, []), (True, ['OSError'])):
+            with self.subTest(finished=finished, errors=errors):
+                completed = Mock()
+                completed.wait.return_value = finished
+                child = SimpleNamespace(_lawliet_job_completion=(completed, errors))
+                with self.assertRaisesRegex(RuntimeError, 'termination could not be confirmed'):
+                    wait_stopped(child)
+                completed.wait.assert_called_once_with(6)
+        completed = Mock()
+        completed.wait.return_value = True
+        wait_stopped(SimpleNamespace(_lawliet_job_completion=(completed, [])))
+
+
 def worker_code(ready):
     descendant = "import time; time.sleep(120)"
     return ("import json,os,pathlib,subprocess,sys,time; "

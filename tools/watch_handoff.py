@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 from datetime import datetime, timezone
-import fcntl
 import hashlib
 import json
 import os
@@ -105,13 +104,31 @@ class Watcher:
         return self.state
 
 
+def _lock_worker(stream):
+    """Nonblocking single-instance lock; release is tied to the open handle."""
+    if os.name == 'nt':
+        import msvcrt
+        if not os.fstat(stream.fileno()).st_size:
+            stream.write('\0'); stream.flush()
+        stream.seek(0)
+        try:
+            msvcrt.locking(stream.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as exc:
+            if exc.errno in (13, 36):
+                raise BlockingIOError('Another watcher owns the development lock') from exc
+            raise
+    else:
+        import fcntl
+        fcntl.flock(stream, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
 def running(directory):
     path = directory / "worker.lock"
     if not path.exists():
         return False
     with path.open("a") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_worker(lock)
         except BlockingIOError:
             return True
     return False
@@ -158,7 +175,7 @@ def run(handoff, directory, interval):
     directory.mkdir(parents=True, exist_ok=True, mode=0o700)
     with (directory / "worker.lock").open("a") as lock:
         try:
-            fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            _lock_worker(lock)
         except BlockingIOError:
             return
         watcher = Watcher(handoff, directory)

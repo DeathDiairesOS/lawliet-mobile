@@ -29,6 +29,7 @@ class ArchiveCache(unittest.TestCase):
  def test_smaller_declared_limit_cannot_reuse(self):self.assertFalse(is_complete(self.dest,self.source,1,10))
  def test_implicit_parent_directories_not_counted_as_files(self):
   other=self.root/'nested';(other/'a/b').mkdir(parents=True);(other/'a/b/file').write_bytes(b'X');write_completion(other,self.source,self.initial,1,1);self.assertTrue(is_complete(other,self.source,1,1))
+ @unittest.skipUnless(hasattr(os, "mkfifo"), "POSIX filesystem FIFOs are not available on Windows; link/reparse protections are checked separately")
  def test_fifo_output_refused_without_open(self):
   os.mkfifo(self.dest/'fifo');self.assertFalse(self.complete())
  def test_receipt_bounds_are_visible(self):
@@ -63,10 +64,18 @@ class ArchiveCache(unittest.TestCase):
   replacement=self.root/'replacement';replacement.write_bytes(b'REPLACED')
   class Hash:
    def __init__(inner):inner.h=original()
-   def update(inner,chunk):replacement.replace(self.source);inner.h.update(chunk)
+   def update(inner,chunk):
+    if os.name=='nt':
+     with self.assertRaises(PermissionError):replacement.replace(self.source)
+    else:replacement.replace(self.source)
+    inner.h.update(chunk)
    def hexdigest(inner):return inner.h.hexdigest()
   with patch('lawliet_mobile.archive_cache.hashlib.sha256',side_effect=Hash):
-   with self.assertRaises(UserError):fingerprint(self.source)
+   if os.name=='nt':
+    self.assertEqual(fingerprint(self.source),self.initial)
+    self.assertEqual(self.source.read_bytes(),b'archive original');self.assertEqual(replacement.read_bytes(),b'REPLACED')
+   else:
+    with self.assertRaises(UserError):fingerprint(self.source)
  def test_earlier_output_changed_during_inventory_is_refused(self):
   from unittest.mock import patch
   (self.dest/'second').write_bytes(b'SECOND');original=fingerprint;calls=[]

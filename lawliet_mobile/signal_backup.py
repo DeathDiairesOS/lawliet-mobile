@@ -4,6 +4,7 @@ import re
 import shutil
 import stat
 import subprocess
+import sys
 import time
 import uuid
 from pathlib import Path
@@ -114,8 +115,8 @@ def _decrypt_signal_owned(root, db, workspace, source, passphrase, timeout, max_
         raise UserError('A 64-character recovery key is not supported here. This decoder accepts only a legacy Android single-file .backup and its known 30-digit passphrase; new on-device folders and Signal Secure Backups are unsupported.')
     if not re.fullmatch(r'[0-9]{30}', secret):
         raise UserError('Legacy Signal backups require the known 30-digit passphrase. New backup formats are not supported by this adapter.')
-    if os.name != 'posix':
-        raise UserError('Secure passphrase transport currently requires macOS/Linux.')
+    if os.name not in {'posix', 'nt'}:
+        raise UserError('Secure passphrase transport is unavailable on this platform.')
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) or not 0 < timeout <= 3600:
         raise UserError('Signal decoding timeout must be greater than zero and at most 3600 seconds.')
     if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
@@ -143,7 +144,8 @@ def _decrypt_signal_owned(root, db, workspace, source, passphrase, timeout, max_
               'executable_sha256': tool['executable_sha256'],
               'timeout_seconds': timeout, 'max_bytes': max_bytes,
               'format': 'android_on_device', 'limitations': list(LIMITATIONS),
-              'note': 'Upstream stdout/stderr suppressed because it may print derived encryption keys. Passphrase sent through a non-echoing private terminal; never recorded. Strict stop-on-error mode prevents silently accepting recovered partial input.'}
+              'passphrase_transport': 'private Windows console via owned anonymous pipe' if os.name == 'nt' else 'non-echoing private POSIX terminal',
+              'note': 'Upstream stdout/stderr suppressed because it may print derived encryption keys. Passphrase supplied through private process communication; never recorded. Strict stop-on-error mode prevents silently accepting recovered partial input.'}
     db.execute('INSERT INTO runs(id,evidence_id,engine,started_at,status,detail) VALUES(?,?,?,?,?,?)', (run, original_eid, 'signalbackup-tools', now(), 'running', json_text(detail)))
     audit(db, 'analysis.started', {'run_id': run, 'evidence_id': original_eid, 'engine': 'signalbackup-tools', 'runner_ownership': owner})
     audit(db, 'signal.decrypt.started', {'run_id': run, 'original_evidence_id': original_eid})
@@ -157,21 +159,35 @@ def _decrypt_signal_owned(root, db, workspace, source, passphrase, timeout, max_
         os.chmod(work, 0o600)
         if digest(work) != original['sha256']:
             raise UserError('Signal working copy failed its integrity check.')
-        import pty, termios
-        master, slave = pty.openpty()
-        attrs = termios.tcgetattr(slave)
-        attrs[3] &= ~termios.ECHO
-        termios.tcsetattr(slave, termios.TCSANOW, attrs)
+        if os.name == 'nt':
+            # Upstream _getch ignores stdin pipes. A job-owned helper provides a
+            # separate hidden console; the secret itself enters only its pipe.
+            slave, master = os.pipe()
+            launch = [sys.executable, str(Path(__file__).with_name('signal_windows.py')), *argv]
+        else:
+            import pty, termios
+            master, slave = pty.openpty()
+            attrs = termios.tcgetattr(slave)
+            attrs[3] &= ~termios.ECHO
+            termios.tcsetattr(slave, termios.TCSANOW, attrs)
+            launch = argv
         guard = storage_guard(folder, max_bytes)
         guard()
-        child, alive = spawn(argv, stdin_fd=slave, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=folder)
+        child, alive = spawn(launch, stdin_fd=slave, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, cwd=folder)
         os.write(master, (secret + '\n').encode())
+        if os.name == 'nt':
+            os.close(master); master = None
+            os.close(slave); slave = None
         deadline = time.monotonic() + timeout
         while child.poll() is None:
             guard()
             if time.monotonic() > deadline:
                 raise UserError('Signal decryption timed out; partial output retained.')
             time.sleep(0.2)
+        if os.name == 'nt':
+            completed_alive, alive = alive, None
+            stop(child, completed_alive)
+            detail['process_tree_terminated_before_import'] = True
         guard()
         detail['returncode'] = child.returncode
         detail['process_status_kind'] = 'guardian exit status; child signal exits mapped to 128+signal'
@@ -200,11 +216,18 @@ def _decrypt_signal_owned(root, db, workspace, source, passphrase, timeout, max_
             raise
         raise UserError(detail['error']) from exc
     finally:
-        if child and child.poll() is None:
-            stop(child, alive)
-            alive = None
+        cleanup_error = None
+        try:
+            if child and (child.poll() is None or (os.name == 'nt' and alive is not None)):
+                closing_alive, alive = alive, None
+                stop(child, closing_alive)
+        except BaseException as exc:
+            cleanup_error = exc
+            status = 'failed'
+            detail['error'] = 'Signal decoder process-tree termination could not be confirmed; output was not imported.'
         if alive is not None:
             os.close(alive)
+            alive = None
         for fd in (master, slave):
             if fd is not None:
                 os.close(fd)
@@ -215,3 +238,5 @@ def _decrypt_signal_owned(root, db, workspace, source, passphrase, timeout, max_
         db.execute('UPDATE runs SET status=?,finished_at=?,detail=? WHERE id=?', (status, now(), json_text(detail), run))
         audit(db, 'signal.decrypt.finished', {'run_id': run, 'status': status, 'original_evidence_id': original_eid, 'derived_evidence_id': detail.get('derived_evidence_id'), 'preserved_original_intact': detail['preserved_original_intact']})
         db.commit()
+        if cleanup_error is not None:
+            raise UserError(detail['error']) from cleanup_error

@@ -3,7 +3,7 @@ import os
 from pathlib import Path
 import unittest
 from unittest.mock import patch
-import test_exif_recovery_registration as fixture
+from tests import test_exif_recovery_registration as fixture
 from lawliet_mobile import core, container_runner as cr
 
 

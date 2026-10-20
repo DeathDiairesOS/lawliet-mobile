@@ -13,6 +13,7 @@ from pathlib import Path
 import subprocess
 import sys
 import threading
+import time
 
 
 def _api():
@@ -25,6 +26,7 @@ def _api():
         'CreateJobObjectW': ([wintypes.LPVOID, wintypes.LPCWSTR], wintypes.HANDLE),
         'SetInformationJobObject': ([wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD], wintypes.BOOL),
         'AssignProcessToJobObject': ([wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
+        'QueryInformationJobObject': ([wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID], wintypes.BOOL),
         'TerminateJobObject': ([wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
         'CloseHandle': ([wintypes.HANDLE], wintypes.BOOL),
     }
@@ -119,17 +121,43 @@ def _startup(handles):
     return startup
 
 
-def _close_job_when_released(api, job, descriptor):
+def _close_job_when_released(api, job, descriptor, completed, errors):
     try:
-        # The caller receives the write descriptor, matching the POSIX API.
         while os.read(descriptor, 1):
             pass
     finally:
         os.close(descriptor)
-        # Windows' implicit KILL_ON_JOB_CLOSE may report exit code zero. Give
-        # explicit cancellation a failure code; closing remains the final guard.
-        api.TerminateJobObject(job, 125)
-        api.CloseHandle(job)
+        try:
+            if not api.TerminateJobObject(job, 125):
+                raise ctypes.WinError(ctypes.get_last_error())
+            class Accounting(ctypes.Structure):
+                _fields_ = [(name, ctypes.c_longlong) for name in (
+                    'user', 'kernel', 'period_user', 'period_kernel')] + [(name, wintypes.DWORD)
+                    for name in ('page_faults', 'total', 'active', 'terminated')]
+            deadline = time.monotonic() + 5
+            while True:
+                counts = Accounting()
+                if not api.QueryInformationJobObject(job, 1, ctypes.byref(counts), ctypes.sizeof(counts), None):
+                    raise ctypes.WinError(ctypes.get_last_error())
+                if counts.active == 0:
+                    break
+                if time.monotonic() >= deadline:
+                    raise TimeoutError('Owned Windows process tree did not terminate within its bound')
+                time.sleep(.01)
+        except BaseException as exc:
+            errors.append(type(exc).__name__)
+        finally:
+            api.CloseHandle(job)
+            completed.set()
+
+
+def wait_stopped(child):
+    """Do not promote child output until the entire owned Job is inactive."""
+    state = getattr(child, '_lawliet_job_completion', None)
+    if state is not None:
+        completed, errors = state
+        if not completed.wait(6) or errors:
+            raise RuntimeError('Owned Windows process-tree termination could not be confirmed')
 
 
 def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None, env=None, hide_console=False):
@@ -168,8 +196,10 @@ def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None, env=None, 
         if not api.AssignProcessToJobObject(job, int(child._handle)):
             raise ctypes.WinError(ctypes.get_last_error())
         alive_read, alive_write = os.pipe()
+        completed, errors = threading.Event(), []
+        child._lawliet_job_completion = (completed, errors)
         watcher = threading.Thread(target=_close_job_when_released,
-            args=(api, job, alive_read), daemon=True, name='lawliet-owned-job')
+            args=(api, job, alive_read, completed, errors), daemon=True, name='lawliet-owned-job')
         watcher.start()
         job = None
         alive_read = None

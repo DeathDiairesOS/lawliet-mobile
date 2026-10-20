@@ -4,7 +4,7 @@ import sqlite3
 
 from lawliet_mobile import native_container_codec as codec
 from lawliet_mobile import native_container_worker as worker
-import test_native_container_worker as fixtures
+from tests import test_native_container_worker as fixtures
 
 
 class CodecWorkerTests(unittest.TestCase):
