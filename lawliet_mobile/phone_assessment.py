@@ -113,7 +113,12 @@ def _assess_in_folder(root,db,workspace,serial,android_user,folder,report,destin
     try:
         destination.check_parent()
         with ChildOutputs(folder) as logs:
-            for name in sorted(os.listdir(logs.fd)):
+            if logs.windows is not None:
+                with logs.windows.listing() as entries:
+                    names = sorted(entry.name for entry in entries)
+            else:
+                names = sorted(os.listdir(logs.fd))
+            for name in names:
                 try:
                     data=logs.read(name,remaining)
                     remaining-=len(data)

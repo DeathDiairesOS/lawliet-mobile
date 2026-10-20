@@ -26,7 +26,7 @@ class ContactsCLIScope(unittest.TestCase):
                     self.assertEqual(args[args.index('--user') + 1], '12')
                     self.assertEqual(args[args.index('--projection') + 1], '_id')
                     text = 'No result found.\n'
-                output.write_text(text)
+                output.write_bytes(text.encode('utf-8'))
                 stderr = Path(str(output) + '.stderr')
                 stderr.write_text('')
                 return {'argv': argv, 'returncode': 0,

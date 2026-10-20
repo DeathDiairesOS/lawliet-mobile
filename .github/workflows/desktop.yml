@@ -20,8 +20,9 @@ jobs:
           - os: windows-latest
             extra: desktop
             renderer: edgechromium
-          # Match the explicit baseline used by the fresh installation check.
-          - os: macos-15
+          # Explicit Intel runner avoids the observed hosted Apple Silicon capacity failure.
+          # Apple Silicon remains covered by the separate installation check and local native run.
+          - os: macos-15-intel
             extra: desktop
             renderer: cocoa
           - os: ubuntu-24.04

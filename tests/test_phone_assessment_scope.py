@@ -38,7 +38,7 @@ class AssessmentScopeTests(unittest.TestCase):
                     self.assertEqual(args[args.index('--projection')+1],'_id')
                     raw='No result found.\n';stderr=provider_stderr;code=provider_exit
                 else:raw='2026-10-15T12:00:00+0000\n'
-                out.write_text(raw);err=Path(str(out)+'.stderr');err.write_text(stderr)
+                out.write_bytes(raw.encode('utf-8'));err=Path(str(out)+'.stderr');err.write_bytes(stderr.encode('utf-8'))
                 return {'argv':argv,'returncode':code,'stdout':str(out),'stderr':str(err)}
             with connect(ws,'A') as(root,db),patch('lawliet_mobile.phone_assessment.command',return_value=['adb']), \
                     patch('lawliet_mobile.phone_assessment.execute',side_effect=transport):

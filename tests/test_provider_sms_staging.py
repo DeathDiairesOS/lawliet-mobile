@@ -44,6 +44,54 @@ class ProviderStagingTests(unittest.TestCase):
         folder,payload,journal=_create_collection_staging(self.case,'000000000001')
         self.assertEqual(folder,self.case/'collections/000000000001')
         self.assertEqual(journal.read_bytes(),b'')
-        self.assertEqual(folder.stat().st_mode&0o777,0o700)
-        self.assertEqual(payload.stat().st_mode&0o777,0o700)
-        self.assertEqual(journal.stat().st_mode&0o777,0o600)
+        if os.name == 'nt':
+            # Windows access is governed by ACLs, not POSIX chmod bits. Verify
+            # the native identity/retained-handle guarantees actually used.
+            from lawliet_mobile.windows_files import WindowsDirectory
+            with WindowsDirectory(payload) as parent:
+                self.assertEqual(parent.read(journal.name,1),b'')
+                self.assertEqual(parent.identity(journal.name)[3],1)
+                with self.assertRaises(PermissionError):
+                    folder.rename(folder.with_name('replaced'))
+        else:
+            self.assertEqual(folder.stat().st_mode&0o777,0o700)
+            self.assertEqual(payload.stat().st_mode&0o777,0o700)
+            self.assertEqual(journal.stat().st_mode&0o777,0o600)
+
+    @unittest.skipUnless(os.name == 'nt', 'Native Windows handle assertions')
+    def test_collection_parent_is_pinned_during_new_directory_creation(self):
+        from lawliet_mobile.provider_contacts import _create_collection
+        parent=self.case/'collections';parent.mkdir(exist_ok=True)
+        real_mkdir=Path.mkdir;attempted=[]
+        def mkdir(path,*args,**kwargs):
+            if path.name=='000000000002':
+                with self.assertRaises(PermissionError):parent.rename(self.case/'replaced')
+                attempted.append(True)
+            return real_mkdir(path,*args,**kwargs)
+        with patch.object(Path,'mkdir',mkdir):
+            folder=_create_collection(self.case,'000000000002')
+        self.assertEqual(attempted,[True])
+        self.assertEqual(list(folder.iterdir()),[])
+        self.assertFalse((self.case/'replaced').exists())
+
+    @unittest.skipUnless(os.name == 'nt', 'Native Windows handle assertions')
+    def test_checkpoint_rejects_linked_journal_and_pins_parent_while_writing(self):
+        from lawliet_mobile.provider_sms import _append_observation
+        folder,payload,journal=_create_collection_staging(self.case,'000000000003')
+        foreign=self.foreign/'journal';foreign.write_bytes(b'FOREIGN')
+        for linked in ('symlink','hardlink'):
+            journal.unlink()
+            if linked=='symlink':journal.symlink_to(foreign)
+            else:os.link(foreign,journal)
+            with self.subTest(linked=linked),self.assertRaises((UserError,OSError)):
+                _append_observation(journal,{'body':'Unicode 🧪'})
+            self.assertEqual(foreign.read_bytes(),b'FOREIGN')
+        journal.unlink();journal.write_bytes(b'')
+        real_write=os.write;attempted=[]
+        def write(fd,raw):
+            with self.assertRaises(PermissionError):payload.rename(folder/'replacement')
+            attempted.append(True)
+            return real_write(fd,raw)
+        with patch.object(os,'write',write):_append_observation(journal,{'body':'Unicode 🧪'})
+        self.assertTrue(attempted)
+        self.assertEqual(journal.read_bytes(),'{"body": "Unicode 🧪"}\n'.encode('utf-8'))

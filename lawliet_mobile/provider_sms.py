@@ -190,6 +190,31 @@ def _create_collection_staging(root, cid):
     root = Path(root).absolute()
     if '..' in root.parts or not re.fullmatch(r'[0-9a-f]{12}', cid):
         raise UserError('Invalid SMS staging path or collection identifier.')
+    if os.name == 'nt':
+        from .windows_files import WindowsDirectory
+        folder = root/'collections'/cid
+        payload = folder/'payload'
+        try:
+            with WindowsDirectory(root):
+                with WindowsDirectory(root/'collections', create=True):
+                    folder.mkdir(mode=0o700)
+                    with WindowsDirectory(folder):
+                        payload.mkdir(mode=0o700)
+                        with WindowsDirectory(payload) as parent:
+                            _, fd = parent.new_file()
+                            published = False
+                            try:
+                                parent.rename(fd, 'sms-provider.jsonl')
+                                published = True
+                            finally:
+                                try:
+                                    if not published:
+                                        parent.delete(fd)
+                                finally:
+                                    os.close(fd)
+        except (OSError, UserError) as exc:
+            raise UserError('SMS collection staging cannot be created safely; no device command was run.') from exc
+        return folder, payload, payload/'sms-provider.jsonl'
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     parent = os.open(root.anchor, flags)
     try:
@@ -217,6 +242,32 @@ def _create_collection_staging(root, cid):
         os.close(parent)
     folder = root/'collections'/cid
     return folder, folder/'payload', folder/'payload/sms-provider.jsonl'
+
+
+def _append_observation(output, row):
+    """Checkpoint UTF-8 provider observations without host newline conversion."""
+    raw = (json.dumps(row, ensure_ascii=False)+'\n').encode('utf-8')
+    if os.name == 'nt':
+        from .windows_files import WindowsDirectory
+        with WindowsDirectory(output.parent) as parent:
+            fd = parent.open_file(output.name, write=True)
+            try:
+                os.lseek(fd, 0, os.SEEK_END)
+                remaining = memoryview(raw)
+                while remaining:
+                    written = os.write(fd, remaining)
+                    if written <= 0:
+                        raise OSError('SMS observation write made no progress.')
+                    remaining = remaining[written:]
+                os.fsync(fd)
+                parent.check()
+            finally:
+                os.close(fd)
+    else:
+        with output.open('ab') as journal:
+            journal.write(raw)
+            journal.flush()
+            os.fsync(journal.fileno())
 
 
 def _collect_sms_owned(root, db, workspace, serial, timeout, max_bytes,
@@ -264,8 +315,11 @@ def _collect_sms_owned(root, db, workspace, serial, timeout, max_bytes,
             if hasattr(exc,'tool_result'):commands.append(exc.tool_result)
             raise
         commands.append(result)
-        raw=(folder/name).read_bytes().decode('utf-8')
-        if result['returncode'] or Path(result['stderr']).read_text().strip(): raise UserError('Provider query failed; raw diagnostics retained.')
+        from .child_output import ChildOutputs
+        with ChildOutputs(folder) as outputs:
+            raw=outputs.read(name,max_bytes).decode('utf-8')
+            stderr=outputs.read(Path(result['stderr']).name,max_bytes).decode('utf-8')
+        if result['returncode'] or stderr.strip(): raise UserError('Provider query failed; raw diagnostics retained.')
         if re.search(r'permission denial|permission denied|securityexception',raw,re.I): raise UserError('SMS provider access denied; no permission change attempted.')
         return raw
     def query(projection, selection, name):
@@ -299,9 +353,7 @@ def _collect_sms_owned(root, db, workspace, serial, timeout, max_bytes,
                 receipt_bytes=sum(len(json_text(item).encode('utf-8')) for item in commands)+16*1024
                 if retained_bytes+row_bytes+receipt_bytes>max_bytes:
                     raise _ProviderBudgetExceeded('Generated SMS observations and retained logs exceed the collection byte budget; partial source retained.')
-                with output.open('a') as journal:
-                    journal.write(json.dumps(row,ensure_ascii=False)+'\n')
-                    journal.flush(); os.fsync(journal.fileno())
+                _append_observation(output, row)
                 rows.append(row)
                 detail['checkpointed_records']=len(rows)
                 db.execute('UPDATE runs SET detail=? WHERE id=?',(json_text(detail),rid));db.commit()

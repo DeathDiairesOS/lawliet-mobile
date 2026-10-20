@@ -55,12 +55,12 @@ class ProviderSMSTests(unittest.TestCase):
             else:
                 if args[args.index('--where')+1]=='0=1':
                     text='No result found.\n'
-                    out.write_text(text);err=Path(str(out)+'.stderr');err.write_text('')
+                    out.write_bytes(text.encode('utf-8'));err=Path(str(out)+'.stderr');err.write_text('')
                     return {'argv':argv,'returncode':0,'stdout':str(out),'stderr':str(err)}
                 if self.interrupt:raise KeyboardInterrupt()
                 self.assertEqual(projection,PROJECTION)
                 identifier=int(args[args.index('--where')+1].split('=')[1]);text=response(identifier,self.records[identifier])
-        out.write_text(text);err=Path(str(out)+'.stderr');err.write_text('')
+        out.write_bytes(text.encode('utf-8'));err=Path(str(out)+'.stderr');err.write_text('')
         return {'argv':argv,'returncode':0,'stdout':str(out),'stderr':str(err)}
 
     def collect(self,**kw):
@@ -90,7 +90,10 @@ class ProviderSMSTests(unittest.TestCase):
             self.assertEqual(preserved['processing_state'],'pending')
             self.assertTrue(verify(root,db)['ok'])
         self.assertEqual(json.loads((Path(result['path'])/'collection.json').read_text())['processing_state'],'finalized')
-        self.assertEqual(len((Path(result['path'])/'payload/sms-provider.jsonl').read_text().splitlines()),2)
+        self.assertEqual(len((Path(result['path'])/'payload/sms-provider.jsonl').read_text(encoding='utf-8').splitlines()),2)
+        retained = (Path(result['path'])/'payload/sms-provider.jsonl').read_bytes()
+        self.assertIn(self.records[1]['body'].splitlines()[0].encode('utf-8'), retained)
+        self.assertNotIn(b'\r\n', retained)
 
     def test_profiles_do_not_merge_same_thread_address_and_text(self):
         a=self.collect(user=0);b=self.collect(user=10)
@@ -109,7 +112,7 @@ class ProviderSMSTests(unittest.TestCase):
         self.records[2]['body']=123  # Valid typed transport, unsupported SMS field storage.
         result=self.collect()
         self.assertEqual(result['status'],'partial');self.assertEqual(result['records'],1)
-        rows=[json.loads(x) for x in (Path(result['path'])/'payload/sms-provider.jsonl').read_text().splitlines()]
+        rows=[json.loads(x) for x in (Path(result['path'])/'payload/sms-provider.jsonl').read_text(encoding='utf-8').splitlines()]
         self.assertEqual(rows[0]['data']['raw_fields']['body'],self.records[1]['body'])
         self.assertTrue((Path(result['path'])/'sms-2.txt').is_file())
         with connect(self.ws,'A') as (root,db):

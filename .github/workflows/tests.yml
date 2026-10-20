@@ -10,7 +10,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-15, windows-latest]
+        os: [ubuntu-latest, macos-15-intel, windows-latest]
         python: ['3.11', '3.14']
     runs-on: ${{ matrix.os }}
     steps:
@@ -26,6 +26,8 @@ jobs:
       - name: Check Windows file and process ownership
         if: runner.os == 'Windows'
         run: python -m unittest tests.test_runner_windows tests.test_windows_file_boundaries tests.test_mulder_runtime tests.test_mulder -v
+      - name: Check acquisition and provider evidence boundaries
+        run: python -m unittest tests.test_agent_collection tests.test_android_workflow tests.test_contacts_cli_scope tests.test_nonroot tests.test_phone_assessment_scope tests.test_provider_contacts tests.test_provider_contacts_boundaries tests.test_provider_sms tests.test_provider_sms_staging tests.test_trash_collection -v
       - name: Run standard-library tests
         if: ${{ !cancelled() }}
         shell: python

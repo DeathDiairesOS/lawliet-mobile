@@ -123,7 +123,7 @@ class AgentCollectionTests(unittest.TestCase):
                     text = 'Row: 0 _id=11\n' if 'phone_v2' in where else 'No result found.\n'
                 else:
                     text = 'Row: 0 data1=+12025550100\n'
-            output.write_text(text)
+            output.write_bytes(text.encode('utf-8'))
             error = Path(str(output) + '.stderr')
             error.write_text('')
             return dict(argv=argv, returncode=0, stdout=str(output), stderr=str(error))
@@ -183,7 +183,7 @@ class AgentCollectionTests(unittest.TestCase):
                 text = 'Bugreport retained\n'
             else:
                 text = '2026-10-17T12:00:00+0000\n' if 'date' in argv else 'Android Debug Bridge fixture\n'
-            output.write_text(text)
+            output.write_bytes(text.encode('utf-8'))
             error = Path(str(output)+'.stderr'); error.write_text('')
             return dict(argv=argv, returncode=0, stdout=str(output), stderr=str(error))
         return transport
@@ -319,7 +319,7 @@ class AgentCollectionTests(unittest.TestCase):
         outside = self.base/'outside-trash'; outside.mkdir()
         (self.root/'collections').symlink_to(outside, target_is_directory=True)
         with patch('lawliet_mobile.tools.command', return_value=['synthetic-adb']), \
-             patch('lawliet_mobile.tools.execute') as execute, self.assertRaises(OSError):
+             patch('lawliet_mobile.tools.execute') as execute, self.assertRaises((OSError, UserError)):
             collect_trash(self.root, self.db, self.workspace, 'SYNTHETIC-1')
         execute.assert_not_called()
         self.assertEqual(list(outside.iterdir()), [])

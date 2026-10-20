@@ -17,7 +17,7 @@ class Boundaries(unittest.TestCase):
                     a=shlex.split(argv[-1]);self.assertEqual(a[a.index('--user')+1],str(user if user is not None else 10))
                     column=a[a.index('--projection')+1];where=a[a.index('--where')+1] if '--where'in a else None
                     text=ids if column=='_id' and where is None else 'Row: 0 display_name=Test\n' if column=='display_name' else 'No result found.\n'
-                output.write_text(text);err=Path(str(output)+'.stderr');err.write_text('')
+                output.write_bytes(text.encode('utf-8'));err=Path(str(output)+'.stderr');err.write_text('')
                 return {'argv':argv,'returncode':0,'stdout':str(output),'stderr':str(err)}
             with connect(ws,'A') as(root,db),patch('lawliet_mobile.provider_contacts.command',return_value=['adb']),patch('lawliet_mobile.provider_contacts.execute',side_effect=fake):
                 result=collect_android(root,db,ws,'TEST',profile='contacts-provider',android_user=user) if through_host else collect_contacts(root,db,ws,'TEST',user=user,max_contacts=max_contacts,max_bytes=max_bytes)
@@ -59,5 +59,5 @@ class Boundaries(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             ws=Path(t)/'cases';create_case(ws,'A');foreign=Path(t)/'foreign';foreign.mkdir();(ws/'A/collections').symlink_to(foreign)
             with connect(ws,'A')as(root,db),patch('lawliet_mobile.provider_contacts.command',return_value=['adb']),patch('lawliet_mobile.provider_contacts.execute',side_effect=AssertionError('no phone')):
-                with self.assertRaises(OSError):collect_contacts(root,db,ws,'TEST')
+                with self.assertRaises((OSError,UserError)):collect_contacts(root,db,ws,'TEST')
             self.assertEqual(list(foreign.iterdir()),[])

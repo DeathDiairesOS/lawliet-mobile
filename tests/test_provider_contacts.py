@@ -45,7 +45,7 @@ class ProviderContactTests(unittest.TestCase):
                     elif column=='_id':text='Row: 0 _id=11\n' if 'phone_v2' in where else 'No result found.\n'
                     elif column=='data1':text='Row: 0 data1=+12025550100\n'
                     else:raise AssertionError(args)
-                output.write_text(text);error=Path(str(output)+'.stderr');error.write_text('')
+                output.write_bytes(text.encode('utf-8'));error=Path(str(output)+'.stderr');error.write_text('')
                 return dict(argv=argv,returncode=0,stdout=str(output),stderr=str(error))
             with connect(ws,'qa') as (root,db),patch('lawliet_mobile.provider_contacts.command',return_value=['adb']),patch('lawliet_mobile.provider_contacts.execute',side_effect=fake):
                 result=collect_contacts(root,db,ws,'SERIAL',user=10)

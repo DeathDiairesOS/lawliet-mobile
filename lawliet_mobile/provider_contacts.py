@@ -49,7 +49,20 @@ def collect_contacts(root,db,workspace,serial,timeout=900,max_bytes=64*1024**2,m
 
 def _create_collection(root, identifier):
     """Refuse symlinked ancestors before any provider command."""
-    root=Path(root).absolute();flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW
+    root=Path(root).absolute()
+    if '..' in root.parts or not isinstance(identifier, str) or not re.fullmatch(r'[0-9a-f]{12}', identifier):
+        raise UserError('Invalid collection staging path or identifier.')
+    if os.name == 'nt':
+        from .windows_files import WindowsDirectory
+        # Keep the existing case and collections ancestry pinned while creating
+        # a fresh attempt. Never reuse another attempt or follow a reparse point.
+        with WindowsDirectory(root):
+            with WindowsDirectory(root/'collections', create=True):
+                folder = root/'collections'/identifier
+                folder.mkdir(mode=0o700)
+                with WindowsDirectory(folder):
+                    return folder
+    flags=os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW
     fd=os.open(root.anchor,flags)
     try:
         for part in root.parts[1:]:
