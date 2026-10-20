@@ -10,6 +10,23 @@ from lawliet_mobile import container_runner as cr
 from lawliet_mobile.core import UserError
 
 class ContainerBoundaries(unittest.TestCase):
+ def test_private_acl_comparison_preserves_trustees_rights_and_protection(self):
+  from lawliet_mobile.container_staging import _same_private_dacl
+  wanted='D:P(A;OICI;FA;;;S-1-5-21-1001)(A;OICI;FA;;;SY)'
+  self.assertTrue(_same_private_dacl(wanted,wanted))
+  self.assertTrue(_same_private_dacl(wanted.replace('D:P','D:PAI',1),wanted))
+  rejected=(
+   wanted.replace('D:P','D:AI',1), # Unprotected parent inheritance.
+   wanted.replace('D:P','D:PARAI',1), # Unexpected requested inheritance.
+   wanted.replace('S-1-5-21-1001','WD'), # Wider trustee.
+   wanted.replace('FA','FR',1), # Wrong rights.
+   wanted.replace('OICI','OICIID',1), # Inherited entry.
+   wanted+'(A;OICI;FA;;;WD)', # Extra grant.
+   wanted.replace('(A;OICI;FA;;;SY)',''), # Missing SYSTEM grant.
+   'D:P', 'D:NO_ACCESS_CONTROL',None,
+  )
+  for actual in rejected:
+   with self.subTest(actual=actual):self.assertFalse(_same_private_dacl(actual,wanted))
  def setUp(self):
   self.tmp=tempfile.TemporaryDirectory();self.addCleanup(self.tmp.cleanup)
   self.root=Path(self.tmp.name).resolve()/'case';self.root.mkdir()

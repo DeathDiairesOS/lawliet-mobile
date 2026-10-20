@@ -39,6 +39,25 @@ def _security_api(directory):
     return api
 
 
+def _same_private_dacl(actual, expected):
+    """Compare canonical ACEs while allowing Windows inheritance bookkeeping.
+
+    SetSecurityInfo can retain SE_DACL_AUTO_INHERITED (AI) even when the DACL
+    is protected (P). AI does not add an inherited ACE or permit parent ACL
+    propagation. Require P and the exact canonical ACE sequence; do not remove
+    flags from individual ACEs or normalize their trustees/access masks.
+    https://learn.microsoft.com/en-us/windows/win32/secauthz/security-descriptor-control
+    """
+    if not isinstance(actual, str) or not isinstance(expected, str):
+        return False
+    actual_flags, separator, actual_aces = actual.partition("(")
+    expected_flags, expected_separator, expected_aces = expected.partition("(")
+    return (actual_flags in ("D:P", "D:PAI")
+            and expected_flags == "D:P"
+            and separator == expected_separator == "("
+            and actual_aces == expected_aces)
+
+
 def private_directory(directory):
     """Set/verify a protected owner+SYSTEM DACL on one newly created directory.
 
@@ -96,8 +115,9 @@ def private_directory(directory):
         actual = actual_text.value
         # Check the actual protected ACL, rather than treating chmod/stat mode
         # emulation as evidence of Windows confidentiality.
-        if actual != wanted_text.value:
-            raise UserError("Private staging DACL could not be verified exactly.")
+        if not _same_private_dacl(actual, wanted_text.value):
+            flags = (actual or "").partition("(")[0]
+            raise UserError(f"Private staging DACL could not be verified; control={flags!r}.")
         directory.check()
         return actual
     finally:
