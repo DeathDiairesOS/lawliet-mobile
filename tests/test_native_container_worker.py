@@ -34,7 +34,9 @@ class WorkerTests(unittest.TestCase):
         self.request = {
             'protocol': worker.PROTOCOL,
             'bootstrap_sha256': worker.sha(Path(worker.__file__).read_bytes()),
-            'package_sha256': worker.package_hashes(package),
+            # Fixture creation is platform-independent. The actual worker
+            # validates the package using Linux nofollow reads when executed.
+            'package_sha256': {p.name: worker.sha(p.read_bytes()) for p in package.iterdir()},
             'evidence': {'id': self.eid, 'platform': 'android', 'label': 'tiny', 'input_name': 'fixture', 'encrypted': False},
             'inputs': [],
         }
@@ -60,6 +62,8 @@ class WorkerTests(unittest.TestCase):
         self.request['inputs'].append({'id': file_id, 'path': name, 'logical_path': logical or name, 'sha256': worker.sha(raw), 'bytes': len(raw)})
 
     def execute(self, raw=None):
+        if sys.platform != 'linux':
+            self.skipTest('Actual private worker syscalls execute on Linux; host codec tests remain platform-independent.')
         self.request_path.write_bytes(worker.canonical(self.request) if raw is None else raw)
         output = io.BytesIO()
         # Host unit fixtures do not pretend to be root-owned Linux RO mounts.
@@ -188,6 +192,8 @@ class WorkerTests(unittest.TestCase):
             with self.assertRaises(ValueError): worker.validate_request(self.request)
         with patch.object(worker, 'MAX_INPUT', 0):
             with self.assertRaises(ValueError): worker.validate_request(self.request)
+
+    def test_linux_worker_manifest_read_cap(self):
         with patch.object(worker, 'MAX_MANIFEST', 1):
             with self.assertRaises(ValueError): self.execute()
 
@@ -199,6 +205,7 @@ class WorkerTests(unittest.TestCase):
         (self.source / 'extra').write_bytes(b'')
         with self.assertRaisesRegex(ValueError, 'inventory'): self.execute()
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux worker filesystem checks')
     def test_symlink_hardlink_fifo_refused_without_read(self):
         foreign = self.base / 'foreign'; foreign.write_bytes(b'a')
         target = self.source / 'a'
@@ -219,12 +226,14 @@ class WorkerTests(unittest.TestCase):
             with self.subTest(raw=raw):
                 with self.assertRaises((ValueError, UnicodeError)): worker.strict(raw)
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux worker nofollow reads')
     def test_read_refuses_oversize_and_links(self):
         path = self.base / 'small'; path.write_bytes(b'12')
         with self.assertRaises(ValueError): worker.read(path, 1)
         link = self.base / 'link'; link.symlink_to(path)
         with self.assertRaises(OSError): worker.read(link, 10)
 
+    @unittest.skipUnless(sys.platform == 'linux', 'Linux worker UID and mount policy')
     def test_static_mount_uid_and_mode_checks_no_mutation(self):
         with patch.object(worker.os, 'getuid', return_value=0):
             with self.assertRaisesRegex(ValueError, 'uid'): worker.validate_mount(self.scratch, self.source)

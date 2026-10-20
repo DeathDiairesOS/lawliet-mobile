@@ -11,7 +11,13 @@ class ContainerBridgeLaunch(unittest.TestCase):
   self.app=self.runtime/'upstream/mulder-1.5.2-ancalor.1/src/mulder/server/app.py';self.app.parent.mkdir(parents=True);self.app.write_text('_LAWLIET_CONTAINER_TOOLS = fixture')
   candidate.write_text('#!/bin/sh\nexport PYTHONPATH='+shlex.quote(str(self.app.parents[2]))+'\nexec '+shlex.quote(sys.executable)+" -c 'from mulder.cli import cli; cli()' \"$@\"\n")
   probe=patch('tools.mulder_endpoint_runtime.inspect_runtime',return_value={'errors':[], 'modules':{'mulder':{'path':str(self.app.parents[1]/'__init__.py')},'mulder.server.app':{'path':str(self.app)}}});probe.start();self.addCleanup(probe.stop)
-  self.socket=self.base/'daemon.sock';s=socket.socket(socket.AF_UNIX);self.addCleanup(s.close);s.bind(str(self.socket))
+  self.socket=self.base/'daemon.sock'
+  if os.name=='posix':
+   s=socket.socket(socket.AF_UNIX);self.addCleanup(s.close);s.bind(str(self.socket))
+  else:
+   # The sandbox endpoint is macOS-only. Invalid-case and nonsocket refusal
+   # tests still run without manufacturing a Windows Unix socket.
+   self.socket.write_bytes(b'not a daemon socket')
  @unittest.skipUnless(Path('/usr/bin/sandbox-exec').exists(),'macOS only')
  def test_explicit_socket_profile_and_environment(self):
   with patch.dict(os.environ,{'DOCKER_HOST':'tcp://remote:2375','DOCKER_CONTEXT':'remote','DOCKER_TLS_VERIFY':'1','DOCKER_CERT_PATH':'remote'}):args,env=launch(self.runtime,self.db,'A',self.socket)
@@ -23,6 +29,7 @@ class ContainerBridgeLaunch(unittest.TestCase):
    with self.subTest(name=name),self.assertRaises(ValueError):launch(self.runtime,self.db,name,self.socket)
  def test_regular_file_not_daemon_socket(self):
   with self.assertRaises(ValueError):launch(self.runtime,self.db,'A',self.db/'A.db')
+ @unittest.skipUnless(Path('/usr/bin/sandbox-exec').is_file(),'Restricted endpoint requires macOS sandbox-exec.')
  def test_broad_runtime_refused(self):
   self.app.write_text('# unqualified old profile')
   with self.assertRaises(ValueError):launch(self.runtime,self.db,'A',self.socket)

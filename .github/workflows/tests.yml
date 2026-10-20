@@ -28,6 +28,8 @@ jobs:
         run: python -m unittest tests.test_runner_windows tests.test_windows_file_boundaries tests.test_mulder_runtime tests.test_mulder -v
       - name: Check acquisition and provider evidence boundaries
         run: python -m unittest tests.test_agent_collection tests.test_android_workflow tests.test_contacts_cli_scope tests.test_nonroot tests.test_phone_assessment_scope tests.test_provider_contacts tests.test_provider_contacts_boundaries tests.test_provider_sms tests.test_provider_sms_staging tests.test_trash_collection -v
+      - name: Check host staging and Linux worker boundaries
+        run: python -m unittest tests.test_container_runner tests.test_sqlite_container_staging tests.test_native_container_review_boundary tests.test_report_container tests.test_native_container_worker tests.test_native_container_codec_worker tests.test_browser_download_residual -v
       - name: Run standard-library tests
         if: ${{ !cancelled() }}
         shell: python

@@ -1,5 +1,7 @@
 """Run staging and lost daemon-response boundaries; no daemon needed."""
 import subprocess
+import os
+import re
 import tempfile
 import unittest
 from pathlib import Path
@@ -27,7 +29,26 @@ class ContainerBoundaries(unittest.TestCase):
   self.assertEqual(keep.read_text(),'original')
  def test_new_run_is_private(self):
   run=cr.create_run_directory(self.root,'0'*12)
-  self.assertEqual(run.stat().st_mode&0o777,0o700)
+  if os.name=='nt':
+   from lawliet_mobile.container_staging import directory_acl
+   from lawliet_mobile.windows_files import WindowsDirectory
+   with WindowsDirectory(run) as directory:acl=directory_acl(directory)
+   self.assertTrue(acl.startswith('D:P'),acl)
+   entries=re.findall(r'\(([^)]+)\)',acl)
+   self.assertEqual(len(entries),2)
+   self.assertTrue(all(entry.startswith('A;OICI;FA;;;') for entry in entries),acl)
+   self.assertIn('A;OICI;FA;;;SY',entries)
+   self.assertNotIn('A;OICI;FA;;;WD',entries)
+  else:self.assertEqual(run.stat().st_mode&0o777,0o700)
+ @unittest.skipUnless(os.name=='nt','Windows DACL isolation')
+ def test_private_run_does_not_change_existing_case_acl_and_acl_failure_refuses(self):
+  from lawliet_mobile.container_staging import directory_acl
+  from lawliet_mobile.windows_files import WindowsDirectory
+  with WindowsDirectory(self.root) as directory:before=directory_acl(directory)
+  cr.create_run_directory(self.root,'0'*12)
+  with WindowsDirectory(self.root) as directory:self.assertEqual(directory_acl(directory),before)
+  with patch('lawliet_mobile.container_staging.private_directory',side_effect=UserError('DACL refused')):
+   with self.assertRaisesRegex(UserError,'DACL refused'):cr.create_run_directory(self.root,'1'*12)
  def removal(self,replies):
   with patch.object(cr,'owned_state',return_value=self.stopped),patch.object(cr,'docker',side_effect=replies):
    return cr.remove_stopped(self.cfg,self.cid,self.expected)

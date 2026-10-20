@@ -24,7 +24,8 @@ def create_run_directory(root, rid):
     except FileExistsError:pass
     with WindowsDirectory(runs):
      target=runs/rid;target.mkdir(mode=0o700)
-     with WindowsDirectory(target):pass
+     from .container_staging import private_directory
+     with WindowsDirectory(target) as created:private_directory(created)
    return target
   except OSError as exc:raise UserError('Run directory cannot be created safely.') from exc
  fd=os.open('/',os.O_RDONLY|os.O_DIRECTORY)
@@ -108,6 +109,12 @@ def owned_state(cfg,cid,expected):
 def publish(path,value):
  from .provider_sms import _write_manifest
  _write_manifest(path,value)
+ if os.name=='nt':
+  from .windows_files import WindowsDirectory
+  # Manifest publication flushes its owned file; directories are retained
+  # through Win32 handles rather than unsupported POSIX directory fsync.
+  with WindowsDirectory(path.parent) as directory:directory.check()
+  return
  fd=os.open(path.parent,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW)
  try:os.fsync(fd)
  finally:os.close(fd)

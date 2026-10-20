@@ -3,6 +3,7 @@ import copy,json,os,subprocess,tempfile,unittest
 from pathlib import Path
 from unittest.mock import patch
 from lawliet_mobile import core,container_runner as cr,tools
+from tests.container_transport_fixtures import move_closed_case
 
 class Registration(unittest.TestCase):
  def setUp(self):
@@ -47,7 +48,7 @@ class Registration(unittest.TestCase):
   self.seed(legacy=True)
   with self.no_daemon(),self.assertRaisesRegex(core.UserError,'Legacy'):self.recover()
  def test_legacy_full_unique_terminal_can_move_and_offline_open(self):
-  self.seed(legacy=True);self.settle();moved=self.ws/'MOVED';self.root.rename(moved);self.root=moved
+  self.seed(legacy=True);self.settle();move_closed_case(self,self.ws/'MOVED')
   with self.no_daemon(),patch.object(cr,'validate_config',side_effect=AssertionError('Closed legacy needs no runtime')):self.recover()
  def test_legacy_state_only_and_wrong_full_receipt_do_not_settle(self):
   self.seed(legacy=True);self.settle({'state':'removed_after_verified_stop'})
@@ -56,7 +57,7 @@ class Registration(unittest.TestCase):
   self.seed();r=self.settle();core.audit(self.db,'analysis.finished',{'run_id':self.rid,'container':r})
   with self.no_daemon(),self.assertRaisesRegex(core.UserError,'ambiguous'):self.recover()
  def test_failed_status_live_daemon_refuses_with_audited_old_labels_after_move(self):
-  self.seed(status='failed');moved=self.ws/'MOVED';self.root.rename(moved);self.root=moved
+  self.seed(status='failed');move_closed_case(self,self.ws/'MOVED')
   self.assertNotEqual(cr.labels(self.root,self.rid,self.owner),self.expected)
   response=subprocess.CompletedProcess([],0,'d'*64+'\n','');state={'State':{'Running':True,'Paused':False,'Restarting':False,'Status':'running'}}
   with patch.object(cr,'validate_config',return_value=self.cfg),patch.object(cr,'docker',return_value=response) as docker,patch.object(cr,'owned_state',return_value=state) as owned:

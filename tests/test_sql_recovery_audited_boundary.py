@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from lawliet_mobile import core, sqlite_container as sc, sqlite_workspace as sw, runner_lease
+from tests.container_transport_fixtures import move_closed_case
 
 
 class RecoveryBoundary(unittest.TestCase):
@@ -30,6 +31,19 @@ class RecoveryBoundary(unittest.TestCase):
         self.live = {'State': {'Running': True, 'Paused': False, 'Restarting': False, 'Status': 'running'}}
 
     def recover(self): return sc.recover_before_retry(self.root, self.db)
+
+    def test_historical_registration_paths_use_originating_host_syntax(self):
+        for socket, docker in (
+            ("/synthetic/daemon.sock", "/synthetic/docker"),
+            (r"C:\synthetic\daemon.sock", r"C:\synthetic\docker.exe"),
+        ):
+            cfg = {**self.cfg, "socket": socket, "docker": docker}
+            self.assertTrue(sc._registration_shape(cfg, self.profile, self.owner))
+        for value in ("relative", "C:relative", r"\\server\share\daemon", "/a/../daemon",
+                      r"C:\daemon:stream", "/socket\ninjected", "\x00", None, True):
+            with self.subTest(path=value):
+                self.assertFalse(sc._registration_shape(
+                    {**self.cfg, "socket": value}, self.profile, self.owner))
 
     def receipt(self):
         return {'protocol': sc.PROTOCOL, 'container_id': 'e' * 64, 'cfg': self.cfg, 'labels': self.expected, 'state': 'removed_after_verified_stop', 'exit_code': 0, 'OOMKilled': False, 'execution_profile': self.profile}
@@ -80,7 +94,7 @@ class RecoveryBoundary(unittest.TestCase):
         with self.assertRaisesRegex(core.UserError, 'unique audited'): self.recover()
 
     def test_failed_status_live_worker_and_moved_case_use_audited_labels(self):
-        moved = self.workspace / 'moved'; self.root.rename(moved); self.root = moved
+        move_closed_case(self, self.workspace / 'moved')
         self.assertNotEqual(sc.labels(self.root, self.rid, self.owner), self.expected)
         with patch.object(sc, 'validate_config', return_value=self.cfg), patch.object(sc, 'inventory', return_value=['e' * 64]) as daemon, patch.object(sc, 'owned_state', return_value=self.live):
             with self.assertRaisesRegex(core.UserError, 'active or uncertain'): self.recover()
@@ -94,14 +108,14 @@ class RecoveryBoundary(unittest.TestCase):
 
     def test_future_exact_settlement_skips_fresh_probes_after_move(self):
         self.settle()
-        moved = self.workspace / 'moved'; self.root.rename(moved); self.root = moved
+        move_closed_case(self, self.workspace / 'moved')
         with patch.object(sc, 'validate_config') as config, patch.object(sc, 'inventory') as daemon:
             self.recover(); config.assert_not_called(); daemon.assert_not_called()
 
     def test_legacy_exact_finished_full_receipt_after_move(self):
         self.legacy(); self.settle()
         before = list(self.db.execute('SELECT detail FROM audit ORDER BY id'))
-        moved = self.workspace / 'moved'; self.root.rename(moved); self.root = moved
+        move_closed_case(self, self.workspace / 'moved')
         with patch.object(sc, 'validate_config') as config, patch.object(sc, 'inventory') as daemon:
             self.recover(); config.assert_not_called(); daemon.assert_not_called()
         self.assertEqual([row[0] for row in before], [row[0] for row in self.db.execute('SELECT detail FROM audit ORDER BY id')])

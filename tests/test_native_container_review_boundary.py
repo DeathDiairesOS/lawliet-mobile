@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from lawliet_mobile import core, native_container as nc, runner_lease
+from tests.container_transport_fixtures import move_closed_case
 
 
 class StagingBoundary(unittest.TestCase):
@@ -53,6 +54,13 @@ class StagingBoundary(unittest.TestCase):
     def test_write_uses_open_directory_even_if_parent_changes_after_check(self):
         with nc._Staging(self.folder) as staged:
             staged.mkdir('container-evidence')
+            if os.name == 'nt':
+                with self.assertRaises(OSError):
+                    self.folder.rename(self.folder.with_name('held'))
+                staged.write('container-evidence/input.txt', b'selected')
+                self.assertEqual(staged.read('container-evidence/input.txt', 100), b'selected')
+                self.assertEqual(list(self.foreign.iterdir()), [])
+                return
             actual_check = staged.check
             swapped = False
             def swap_after_check():
@@ -88,6 +96,11 @@ class StagingBoundary(unittest.TestCase):
         with nc._Staging(self.folder) as staged:
             staged.mkdir('container-control')
             staged.write('container-control/request.json', b'{}')
+            if os.name == 'nt':
+                with self.assertRaises(OSError):
+                    self.folder.rename(self.folder.with_name('held'))
+                self.assertEqual(staged.read('container-control/request.json', 10), b'{}')
+                return
             self.folder.rename(self.folder.with_name('held'))
             self.folder.symlink_to(self.foreign, target_is_directory=True)
             with self.assertRaises((OSError, core.UserError)):
@@ -182,7 +195,7 @@ class AuditedRecoveryBoundary(unittest.TestCase):
 
     def test_moved_root_uses_audited_original_labels_and_refuses_live(self):
         moved = self.workspace / 'moved'
-        self.root.rename(moved)
+        move_closed_case(self, moved)
         original_labels = self.initial['native_container_labels']
         self.assertNotEqual(original_labels, nc.labels(moved, self.rid, self.owner))
         active = {'State': {'Running': True, 'Paused': False, 'Restarting': False, 'Status': 'running'}}
@@ -208,7 +221,7 @@ class AuditedRecoveryBoundary(unittest.TestCase):
         receipt = {'protocol': nc.PROTOCOL, 'container_id': 'b' * 64, 'cfg': self.cfg, 'labels': self.initial['native_container_labels'], 'state': 'removed_after_verified_stop', 'exit_code': 0, 'OOMKilled': False, 'execution_profile': self.profile}
         self.db.execute('UPDATE runs SET detail=?', (core.json_text({**self.initial, 'container': receipt}),))
         core.audit(self.db, 'analysis.finished', {'run_id': self.rid, 'container': receipt})
-        moved = self.workspace / 'moved'; self.root.rename(moved)
+        moved = self.workspace / 'moved'; move_closed_case(self, moved)
         with patch.object(nc, 'validate_config') as cfg, patch.object(nc, 'inventory') as daemon:
             nc.recover_before_retry(moved, self.db)
             cfg.assert_not_called(); daemon.assert_not_called()

@@ -54,6 +54,17 @@ class StagingTests(unittest.TestCase):
  def test_directory_swapped_after_leaf_open_writes_only_owned_inode_then_refuses(self):
   with sc._Staging(self.folder) as staged:
    staged.mkdir('container-input');actual=os.open;replaced=False
+   if os.name=='nt':
+    from lawliet_mobile.windows_files import WindowsDirectory
+    create=WindowsDirectory.new_file
+    def protected(directory):
+     nonlocal replaced
+     value=create(directory);replaced=True
+     with self.assertRaises(OSError):(self.folder/'container-input').rename(self.folder/'held-input')
+     return value
+    with patch.object(WindowsDirectory,'new_file',protected):staged.write('container-input/database.sqlite',b'OWNED-COPY')
+    self.assertTrue(replaced);self.assertEqual(staged.read('container-input/database.sqlite',100),b'OWNED-COPY')
+    self.unchanged();return
    def race(path,flags,*args,**kwargs):
     nonlocal replaced
     fd=actual(path,flags,*args,**kwargs)

@@ -1,5 +1,5 @@
 """Bounded report prototype controls; daemon mocked unless separate actual harness."""
-import copy,hashlib,io,json,os,sqlite3,tempfile,unittest,shutil
+import copy,hashlib,io,json,os,sqlite3,tempfile,unittest,shutil,sys
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -11,6 +11,16 @@ class Reports(unittest.TestCase):
   self.source=self.base/'report.jsonl';self.source.write_text(json.dumps({'category':'messages','body':'café 🐈','data':{'message':{'app':'sms','conversation':'thread1'}}})+'\n')
   self.cfg={'image':rc.IMAGE,'socket':'/synthetic/socket','docker':'/synthetic/docker','bootstrap_sha256':core.digest(rc.WORKER)}
  def decode(self,root,rid,owner,cfg,manifest,request,raw,profile,folder):
+  if sys.platform!='linux':
+   # Host publication/recovery semantics stay exercised on Windows. This is
+   # deliberately synthetic transport, not a claim of Linux worker execution.
+   from tests.container_transport_fixtures import report_transport
+   raw_output=report_transport(root/'evidence'/request['source']['evidence_id']/manifest[0]['path'],request,raw,profile)
+  else:raw_output=Reports.worker_decode(self,root,rid,owner,cfg,manifest,request,raw,profile,folder)
+  (folder/'report.stdout.jsonl').write_bytes(raw_output);(folder/'report.stderr').write_bytes(b'')
+  receipt={'protocol':rc.PROTOCOL,'container_id':'d'*64,'cfg':cfg,'labels':rc.labels(root,rid,owner),'state':'removed_after_verified_stop','exit_code':0,'OOMKilled':False,'execution_profile':profile}
+  return codec.validate(raw_output,rc.bindings_for(raw,request,profile)),receipt
+ def worker_decode(self,root,rid,owner,cfg,manifest,request,raw,profile,folder):
   request_path=folder/'fixture-request.json';request_path.write_bytes(raw);scratch=folder/'fixture-scratch';scratch.mkdir()
   code=folder/'fixture-code';(code/'lawliet_mobile').mkdir(parents=True)
   for path in Path(rc.__file__).parent.glob('*.py'):shutil.copyfile(path,code/'lawliet_mobile'/path.name)
@@ -19,9 +29,7 @@ class Reports(unittest.TestCase):
    with patch.object(worker,'mount_checks'),patch.dict(os.environ,{}):
     out=io.BytesIO();worker.execute(out,request_path=request_path,code_root=code,source_path=root/'evidence'/request['source']['evidence_id']/manifest[0]['path'],scratch=scratch)
   finally:tempfile.tempdir=old_temp;__import__('sys').path[:]=oldpath
-  raw_output=out.getvalue();(folder/'report.stdout.jsonl').write_bytes(raw_output);(folder/'report.stderr').write_bytes(b'')
-  receipt={'protocol':rc.PROTOCOL,'container_id':'d'*64,'cfg':cfg,'labels':rc.labels(root,rid,owner),'state':'removed_after_verified_stop','exit_code':0,'OOMKilled':False,'execution_profile':profile}
-  return codec.validate(raw_output,rc.bindings_for(raw,request,profile)),receipt
+  return out.getvalue()
  def contained(self,root,db,source=None,format_name='jsonl',run=None,origin_file_id=None):
   with patch.object(rc,'configured',return_value=self.cfg),patch.object(rc,'run',side_effect=run or self.decode):return parsed.import_parsed(root,db,source or self.source,format_name,contained=True,origin_file_id=origin_file_id)
  def test_same_ids_host_contained_exact_artifact_parity(self):
@@ -109,5 +117,17 @@ class Reports(unittest.TestCase):
   with core.connect(self.ws,'A') as (root,db),patch.object(core,'audit',side_effect=fail):
    with self.assertRaises(core.UserError):self.contained(root,db)
    self.assertEqual(db.execute('SELECT status,records FROM runs').fetchone()[:],('failed',0));self.assertEqual(db.execute('SELECT count(*) FROM artifacts').fetchone()[0],0)
+ @unittest.skipUnless(sys.platform=='linux','Real container worker syscall qualification executes on Linux.')
+ def test_synthetic_host_transport_matches_real_linux_worker(self):
+  from tests.container_transport_fixtures import report_transport
+  def checked(*args):
+   root,rid,owner,cfg,manifest,request,raw,profile,folder=args
+   actual=self.worker_decode(*args)
+   expected=report_transport(root/'evidence'/request['source']['evidence_id']/manifest[0]['path'],request,raw,profile)
+   self.assertEqual(actual,expected)
+   (folder/'report.stdout.jsonl').write_bytes(actual);(folder/'report.stderr').write_bytes(b'')
+   receipt={'protocol':rc.PROTOCOL,'container_id':'d'*64,'cfg':cfg,'labels':rc.labels(root,rid,owner),'state':'removed_after_verified_stop','exit_code':0,'OOMKilled':False,'execution_profile':profile}
+   return codec.validate(actual,rc.bindings_for(raw,request,profile)),receipt
+  with core.connect(self.ws,'A') as (root,db):self.contained(root,db,run=checked)
 
 if __name__=='__main__':unittest.main()

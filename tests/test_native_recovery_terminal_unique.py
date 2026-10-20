@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from unittest.mock import patch
 from lawliet_mobile import core, native_container as native, parsers
+from tests.container_transport_fixtures import move_closed_case
 
 
 class TerminalUniqueness(unittest.TestCase):
@@ -49,10 +50,10 @@ class TerminalUniqueness(unittest.TestCase):
         original = self.root; moved = self.workspace / 'moved'
         for status in ('complete', 'partial', 'failed', 'running', 'interrupted'):
             self.db.execute('UPDATE runs SET status=?', (status,)); self.db.commit()
-            original.rename(moved)
+            move_closed_case(self, moved)
             try:
                 with self.subTest(status=status), self.no_runtime(): native.recover_before_retry(moved, self.db)
-            finally: moved.rename(original)
+            finally: move_closed_case(self, original)
 
     def test_nonsettlement_failed_audit_does_not_make_recovery_ambiguous(self):
         core.audit(self.db, 'analysis.finished', {'run_id': self.rid, 'status': 'failed', 'new_records': 0})

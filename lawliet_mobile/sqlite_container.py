@@ -5,7 +5,7 @@ control descriptor, socket, host environment, CaseDB or writable host mount.
 """
 from __future__ import annotations
 import hashlib,json,os,re,selectors,stat,subprocess,time
-from pathlib import Path
+from pathlib import Path,PurePosixPath,PureWindowsPath
 from .core import UserError,digest
 from .container_runner import docker,owned_state,publish,remove_stopped,confirmed_absent
 from .sqlite_container_codec import decode,MAX_FRAME
@@ -86,7 +86,21 @@ def _audited_labels(value,rid,owner):
 def _registration_shape(cfg,profile,owner):
  # Historical settled jobs must not depend on fresh socket/CLI/source probes.
  hashes=('host_adapter_sha256','host_codec_sha256','bootstrap_sha256')
- return (isinstance(cfg,dict) and set(cfg)=={'image','socket','docker','bootstrap_sha256'} and cfg['image']==IMAGE and all(isinstance(cfg[k],str) and Path(cfg[k]).is_absolute() and not any(c in cfg[k] for c in (',','\n','\r')) for k in ('socket','docker')) and isinstance(cfg['bootstrap_sha256'],str) and re.fullmatch('[0-9a-f]{64}',cfg['bootstrap_sha256']) is not None and isinstance(profile,dict) and set(profile)=={'profile','protocol',*hashes} and profile['profile']=='lawliet-python-sqlite-isolation/1' and profile['protocol']==PROTOCOL and all(isinstance(profile[k],str) and re.fullmatch('[0-9a-f]{64}',profile[k]) is not None for k in hashes) and profile['bootstrap_sha256']==cfg['bootstrap_sha256'] and isinstance(owner,dict) and set(owner)=={'protocol','device','inode','nonce'} and owner['protocol']=='ancalor-runner-lease-v1' and type(owner['device']) is int and owner['device']>=0 and type(owner['inode']) is int and owner['inode']>0 and isinstance(owner['nonce'],str) and re.fullmatch('[0-9a-f]{32}',owner['nonce']) is not None)
+ return (isinstance(cfg,dict) and set(cfg)=={'image','socket','docker','bootstrap_sha256'} and cfg['image']==IMAGE and all(_historical_local_path(cfg[k]) for k in ('socket','docker')) and isinstance(cfg['bootstrap_sha256'],str) and re.fullmatch('[0-9a-f]{64}',cfg['bootstrap_sha256']) is not None and isinstance(profile,dict) and set(profile)=={'profile','protocol',*hashes} and profile['profile']=='lawliet-python-sqlite-isolation/1' and profile['protocol']==PROTOCOL and all(isinstance(profile[k],str) and re.fullmatch('[0-9a-f]{64}',profile[k]) is not None for k in hashes) and profile['bootstrap_sha256']==cfg['bootstrap_sha256'] and isinstance(owner,dict) and set(owner)=={'protocol','device','inode','nonce'} and owner['protocol']=='ancalor-runner-lease-v1' and type(owner['device']) is int and owner['device']>=0 and type(owner['inode']) is int and owner['inode']>0 and isinstance(owner['nonce'],str) and re.fullmatch('[0-9a-f]{32}',owner['nonce']) is not None)
+
+def _historical_local_path(value):
+ # A moved, already-settled case retains the originating host's path syntax.
+ # This is shape validation only: unsettled recovery still calls validate_config
+ # and probes the explicit local daemon before changing any recorded state.
+ if not isinstance(value,str) or any(c in value for c in (',','\n','\r','\x00')):return False
+ if PurePosixPath(value).is_absolute() and not value.startswith('//') and '\\' not in value:return '..' not in PurePosixPath(value).parts
+ path=PureWindowsPath(value)
+ if not path.is_absolute() or len(path.drive)!=2 or path.drive[1]!=':' or not path.drive[0].isalpha():return False
+ from .windows_files import component
+ try:
+  for part in path.parts[1:]:component(part)
+ except UserError:return False
+ return True
 
 def recover_before_retry(root,db):
  """Resolve audited daemon registrations; missing mutable metadata never hides one."""
@@ -147,7 +161,7 @@ def _mount(source,target):
 
 class _Staging:
  """Hold run/destination directory identities; every write uses nofollow dirfds."""
- def __init__(self,folder):self.folder=Path(folder).absolute();self.fd=None;self.dirs={}
+ def __init__(self,folder):self.folder=Path(folder).absolute();self.fd=None;self.dirs={};self.windows=None
  @staticmethod
  def _open(path):
   path=Path(path).absolute()
@@ -158,8 +172,14 @@ class _Staging:
     child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd);os.close(fd);fd=child
    return fd
   except BaseException:os.close(fd);raise
- def __enter__(self):self.fd=self._open(self.folder);return self
+ def __enter__(self):
+  if os.name=='nt':
+   from .container_staging import WindowsStaging
+   self.windows=WindowsStaging(self.folder).__enter__()
+  else:self.fd=self._open(self.folder)
+  return self
  def __exit__(self,*args):
+  if self.windows is not None:self.windows.__exit__(*args);self.windows=None;return
   for fd in self.dirs.values():os.close(fd)
   self.dirs.clear()
   if self.fd is not None:os.close(self.fd);self.fd=None
@@ -180,6 +200,7 @@ class _Staging:
    return fd,parts[-1]
   except BaseException:os.close(fd);raise
  def check(self):
+  if self.windows is not None:return self.windows.check()
   fd=self._open(self.folder)
   try:
    if (os.fstat(fd).st_dev,os.fstat(fd).st_ino)!=(os.fstat(self.fd).st_dev,os.fstat(self.fd).st_ino):raise UserError('SQLite staging directory changed.')
@@ -191,6 +212,7 @@ class _Staging:
     if not stat.S_ISDIR(current.st_mode) or (current.st_dev,current.st_ino)!=(held.st_dev,held.st_ino):raise UserError('SQLite staging child directory changed.')
    finally:os.close(parent)
  def mkdir(self,name):
+  if self.windows is not None:return self.windows.mkdir(name)
   self.check();parent,leaf=self._parent(name)
   try:
    os.mkdir(leaf,0o755,dir_fd=parent)
@@ -199,6 +221,7 @@ class _Staging:
   finally:os.close(parent)
   self.check()
  def write(self,name,data):
+  if self.windows is not None:return self.windows.write(name,data)
   self.check();parent,leaf=self._parent(name,create=True);fd=None
   try:
    fd=os.open(leaf,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
@@ -213,6 +236,7 @@ class _Staging:
    os.close(parent)
   self.check()
  def read(self,name,limit):
+  if self.windows is not None:return self.windows.read(name,limit)
   self.check();parent,leaf=self._parent(name);fd=None
   try:
    fd=os.open(leaf,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent);before=os.fstat(fd)

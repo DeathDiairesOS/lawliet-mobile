@@ -156,7 +156,7 @@ def request_for(cfg,evidence,manifest):
 
 class _Staging:
  """Hold run/destination directory identities; every write uses nofollow dirfds."""
- def __init__(self,folder):self.folder=Path(folder).absolute();self.fd=None;self.dirs={}
+ def __init__(self,folder):self.folder=Path(folder).absolute();self.fd=None;self.dirs={};self.windows=None
  @staticmethod
  def _open(path):
   path=Path(path).absolute()
@@ -167,8 +167,14 @@ class _Staging:
     child=os.open(part,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW,dir_fd=fd);os.close(fd);fd=child
    return fd
   except BaseException:os.close(fd);raise
- def __enter__(self):self.fd=self._open(self.folder);return self
+ def __enter__(self):
+  if os.name=='nt':
+   from .container_staging import WindowsStaging
+   self.windows=WindowsStaging(self.folder).__enter__()
+  else:self.fd=self._open(self.folder)
+  return self
  def __exit__(self,*args):
+  if self.windows is not None:self.windows.__exit__(*args);self.windows=None;return
   for fd in self.dirs.values():os.close(fd)
   self.dirs.clear()
   if self.fd is not None:os.close(self.fd);self.fd=None
@@ -189,6 +195,7 @@ class _Staging:
    return fd,parts[-1]
   except BaseException:os.close(fd);raise
  def check(self):
+  if self.windows is not None:return self.windows.check()
   fd=self._open(self.folder)
   try:
    if (os.fstat(fd).st_dev,os.fstat(fd).st_ino)!=(os.fstat(self.fd).st_dev,os.fstat(self.fd).st_ino):raise UserError('Native staging directory changed.')
@@ -200,6 +207,7 @@ class _Staging:
     if not stat.S_ISDIR(current.st_mode) or (current.st_dev,current.st_ino)!=(held.st_dev,held.st_ino):raise UserError('Native staging child directory changed.')
    finally:os.close(parent)
  def mkdir(self,name):
+  if self.windows is not None:return self.windows.mkdir(name)
   self.check();parent,leaf=self._parent(name)
   try:
    os.mkdir(leaf,0o755,dir_fd=parent)
@@ -208,6 +216,7 @@ class _Staging:
   finally:os.close(parent)
   self.check()
  def write(self,name,data):
+  if self.windows is not None:return self.windows.write(name,data)
   self.check();parent,leaf=self._parent(name,create=True);fd=None
   try:
    fd=os.open(leaf,os.O_WRONLY|os.O_CREAT|os.O_EXCL|os.O_NOFOLLOW,0o600,dir_fd=parent)
@@ -222,6 +231,7 @@ class _Staging:
    os.close(parent)
   self.check()
  def read(self,name,limit):
+  if self.windows is not None:return self.windows.read(name,limit)
   self.check();parent,leaf=self._parent(name);fd=None
   try:
    fd=os.open(leaf,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK,dir_fd=parent);before=os.fstat(fd)
