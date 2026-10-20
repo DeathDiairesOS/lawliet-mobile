@@ -2,7 +2,9 @@ import bz2
 import gzip
 import io
 import os
+import re
 import stat
+import subprocess
 import tarfile
 import tempfile
 import unittest
@@ -116,6 +118,54 @@ class BoundedArchivesTests(unittest.TestCase):
                 extract_bounded(source, self.destination)
         self.assertEqual((self.destination/'foreign').read_bytes(), b'PRESERVE FOREIGN')
         self.assertFalse((self.destination/'a').exists())
+        self.assertFalse(list(self.root.glob('.lawliet-archive-*')))
+
+    @unittest.skipUnless(os.name == 'nt', 'Requires actual Windows DACL inspection')
+    def test_windows_stage_is_private_before_decoding_and_acl_refusal_preserves_folders(self):
+        from lawliet_mobile.container_staging import directory_acl
+        from lawliet_mobile.windows_files import WindowsDirectory
+        def acl(path):
+            with WindowsDirectory(path) as directory:
+                return directory_acl(directory)
+        subprocess.run(['icacls', str(self.root), '/grant', '*S-1-1-0:(OI)(CI)(R)'],
+                       check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        parent_before = acl(self.root)
+        self.assertIn(';;;WD)', parent_before)
+        source = self.zipped([('a', b'PRIVATE DECODED BYTES')])
+        original_open = zipfile.ZipFile.open
+        observed = []
+        def inspect(archive, *args, **kwargs):
+            # The stage has a DELETE handle now; inspect its retained identity
+            # through the helper's security check before that handoff instead.
+            self.assertEqual(len(observed), 1)
+            return original_open(archive, *args, **kwargs)
+        from lawliet_mobile.container_staging import private_directory
+        def protect(directory):
+            value = private_directory(directory)
+            observed.append(directory_acl(directory))
+            self.assertEqual(list(directory.path.iterdir()), [])
+            return value
+        with patch('lawliet_mobile.container_staging.private_directory', side_effect=protect), \
+                patch.object(zipfile.ZipFile, 'open', inspect):
+            self.assertEqual(extract_bounded(source, self.destination), ['a'])
+        published = acl(self.destination)
+        self.assertTrue(published.startswith('D:P'), published)
+        self.assertEqual(len(re.findall(r'\(([^)]+)\)', published)), 2, published)
+        self.assertIn('A;OICI;FA;;;SY', published)
+        self.assertNotIn(';;;WD)', published)
+        self.assertEqual(published, observed[0])
+        self.assertEqual(acl(self.root), parent_before)
+        (self.destination/'a').unlink()
+        private_before = acl(self.destination)
+        with patch('lawliet_mobile.container_staging.private_directory',
+                   side_effect=UserError('Synthetic DACL refusal')), \
+                patch.object(zipfile.ZipFile, 'open') as decode:
+            with self.assertRaisesRegex(UserError, 'Synthetic DACL refusal'):
+                extract_bounded(source, self.destination)
+            decode.assert_not_called()
+        self.assertEqual(acl(self.root), parent_before)
+        self.assertEqual(acl(self.destination), private_before)
+        self.assertEqual(list(self.destination.iterdir()), [])
         self.assertFalse(list(self.root.glob('.lawliet-archive-*')))
 
     @unittest.skipUnless(os.name == 'posix', 'Windows pins the original directory during decoding')

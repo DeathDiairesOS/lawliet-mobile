@@ -1,6 +1,7 @@
 """Signal customer intake qualification using controlled local decoder processes."""
 import json
 import os
+import re
 import signal
 import subprocess
 import time
@@ -51,6 +52,42 @@ con.close()
 (out / 'attachment_8.bin').write_bytes(b'known retained attachment bytes')
 """ + operation + '\n')
         configure(self.workspace, 'signalbackup-tools', tool, sys.executable)
+
+    @unittest.skipUnless(os.name == 'nt', 'Requires actual Windows DACL inspection')
+    def test_windows_plaintext_run_is_private_and_acl_failure_preserves_existing_folders(self):
+        from lawliet_mobile.container_staging import directory_acl
+        from lawliet_mobile.windows_files import WindowsDirectory
+        def acl(path):
+            with WindowsDirectory(path) as directory:
+                return directory_acl(directory)
+        self.decoder()
+        with connect(self.workspace, 'signal') as (root, db):
+            # Synthetic permissive workspace proves the fix removes inherited
+            # readers rather than passing because the test host was private.
+            subprocess.run(['icacls', str(root), '/grant', '*S-1-1-0:(OI)(CI)(R)'],
+                           check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+            before, source_before = acl(root), acl(self.backup.parent)
+            self.assertIn(';;;WD)', before)
+            result = decrypt_signal(root, db, self.workspace, self.backup, KEY, timeout=10)
+            run = root/'runs'/result['run_id']
+            run_acl = acl(run)
+            self.assertTrue(run_acl.startswith('D:P'), run_acl)
+            entries = re.findall(r'\(([^)]+)\)', run_acl)
+            self.assertEqual(len(entries), 2, run_acl)
+            self.assertIn('A;OICI;FA;;;SY', entries)
+            self.assertTrue(any(re.fullmatch(r'A;OICI;FA;;;S-\d+(?:-\d+)+', e)
+                                for e in entries), run_acl)
+            self.assertNotIn(';;;WD)', acl(run/'decrypted'))
+            self.assertEqual(acl(root), before)
+            self.assertEqual(acl(self.backup.parent), source_before)
+            with patch('lawliet_mobile.container_staging.private_directory',
+                       side_effect=UserError('Synthetic DACL refusal')), \
+                    patch('lawliet_mobile.runner_lease.spawn') as spawn:
+                with self.assertRaisesRegex(UserError, 'Synthetic DACL refusal'):
+                    decrypt_signal(root, db, self.workspace, self.backup, KEY, timeout=10)
+                spawn.assert_not_called()
+            self.assertEqual(acl(root), before)
+            self.assertEqual(acl(self.backup.parent), source_before)
 
     @unittest.skipUnless(os.name == 'nt', 'Requires the real Windows CRT console and Job Object')
     def test_windows_crt_prompt_private_console_job_and_no_secret_persistence(self):

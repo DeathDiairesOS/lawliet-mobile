@@ -39,7 +39,23 @@ class ArchivePublication:
             if any(self.destination.iterdir()):
                 raise UserError('Archive destination must remain empty.')
             self.stage = Path(tempfile.mkdtemp(prefix='.lawliet-archive-', dir=self.parent.path))
-            self.stage_fd, self.stage_identity = self._directory(self.stage)
+            # Protect the newly created empty stage before any decoded bytes
+            # exist. Do not rewrite the original destination or parent ACL.
+            from .container_staging import private_directory
+            privacy_error = None
+            with WindowsDirectory(self.stage) as created:
+                self.stage_identity = created.handles[-1][1]
+                try:
+                    private_directory(created)
+                except BaseException as exc:
+                    privacy_error = exc
+            self.stage_fd, actual_identity = self._directory(self.stage)
+            if actual_identity != self.stage_identity:
+                os.close(self.stage_fd)
+                self.stage_fd = None
+                raise UserError('Archive staging directory changed after privacy setup.')
+            if privacy_error is not None:
+                raise privacy_error
             return self.stage, self.publish
         except BaseException:
             self.__exit__(None, None, None)

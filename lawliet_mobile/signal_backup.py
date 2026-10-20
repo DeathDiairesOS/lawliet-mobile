@@ -131,8 +131,14 @@ def _decrypt_signal_owned(root, db, workspace, source, passphrase, timeout, max_
     preserved = root / 'evidence' / original_eid / original['path']
     db.execute('UPDATE evidence SET encrypted=1 WHERE id=?', (original_eid,))
     run = uuid.uuid4().hex[:12]
-    folder = root / 'runs' / run
-    folder.mkdir(mode=0o700, parents=True)
+    if os.name == 'nt':
+        # Python 3.11 ignores mkdir's POSIX mode on Windows. Protect the new
+        # run with the existing verified DACL before creating plaintext output.
+        from .container_runner import create_run_directory
+        folder = create_run_directory(root, run)
+    else:
+        folder = root / 'runs' / run
+        folder.mkdir(mode=0o700, parents=True)
     output = folder / 'decrypted'
     output.mkdir(mode=0o700)
     work = folder / 'input.backup'

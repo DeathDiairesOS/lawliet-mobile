@@ -118,7 +118,7 @@ class IOSCollectionPortableTests(unittest.TestCase):
         link = self.root / 'collections'
         if os.name == 'nt':
             result = subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(link), str(foreign)],
-                                    capture_output=True, text=True, timeout=10)
+                                    capture_output=True, timeout=10)
             self.assertEqual(result.returncode, 0, result.stderr)
             self.addCleanup(link.rmdir)
         else:
