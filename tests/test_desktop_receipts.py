@@ -27,7 +27,7 @@ class DesktopReceiptGateTests(unittest.TestCase):
             "restart": {"ok": True, "initial_pid": 100, "reopened_pid": 101,
                         "new_process": True, "approval_persisted": True, "export_verified": True},
         }
-        for host, system in (("macos-latest", "macOS"), ("windows-latest", "Windows"),
+        for host, system in (("macos-15", "macOS"), ("windows-latest", "Windows"),
                              ("ubuntu-24.04", "Linux")):
             folder = self.root / ("desktop-smoke-" + host)
             folder.mkdir()

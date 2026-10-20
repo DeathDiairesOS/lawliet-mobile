@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 import re
 
-HOSTS = {"windows-latest", "macos-latest", "ubuntu-24.04"}
+HOSTS = {"windows-latest", "macos-15", "ubuntu-24.04"}
 SHA256 = re.compile(r"[0-9a-f]{64}\Z")
 
 
@@ -24,7 +24,7 @@ def check_receipts(directory: Path, commit: str):
             if env.get("commit") != commit:
                 errors.append(f"{host}: source commit does not match {commit}")
             if env.get("runner_os") != {
-                "windows-latest": "Windows", "macos-latest": "macOS",
+                "windows-latest": "Windows", "macos-15": "macOS",
                 "ubuntu-24.04": "Linux",
             }[host]:
                 errors.append(f"{host}: native host identity is missing or inconsistent")
