@@ -75,7 +75,10 @@ con.close()
             entries = re.findall(r'\(([^)]+)\)', run_acl)
             self.assertEqual(len(entries), 2, run_acl)
             self.assertIn('A;OICI;FA;;;SY', entries)
-            self.assertTrue(any(re.fullmatch(r'A;OICI;FA;;;S-\d+(?:-\d+)+', e)
+            # Elevated Windows runners can create directories owned by
+            # Administrators; SDDL serializes that owning SID as BA.
+            # The production helper separately verifies the exact owner SID.
+            self.assertTrue(any(re.fullmatch(r'A;OICI;FA;;;(?:BA|S-\d+(?:-\d+)+)', e)
                                 for e in entries), run_acl)
             self.assertNotIn(';;;WD)', acl(run/'decrypted'))
             self.assertEqual(acl(root), before)
