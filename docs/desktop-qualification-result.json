@@ -1,0 +1,206 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-20",
+  "commit": "53dc5bc0a82a488d600019a52ac66778f41dcfd3",
+  "scope": "Frozen Android directory -> native import and indexing -> desktop inspection -> examiner finding -> synthetic approval -> local report export -> new-process restart",
+  "ok": true,
+  "hosted_macos_ci": "Queued at time of this comparison; macOS result below is an actual local native run, not a hosted CI result.",
+  "corpus_sha256": "6ac86a307f18af7f3a5443599ac3df519a6e046a0d27d5e80df139cfa8b6aefb",
+  "oracle_sha256": "90bed257960deebd255b99c3b36c3c1f9bd8e7e1ed2e52c5d8bb1653f04ce3a8",
+  "hosts": {
+    "macOS": {
+      "execution_origin": "local native application",
+      "job_url": null,
+      "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+      "python": "3.13.14 (main, Jun 10 2026, 12:24:04) [Clang 17.0.0 (clang-1700.6.4.2)]",
+      "sqlite_version": "3.54.0",
+      "renderer": "cocoa",
+      "package_versions": {
+        "lawliet-mobile": "0.1.0",
+        "pywebview": "6.2.1",
+        "pyobjc-core": "12.2.2",
+        "pyobjc-framework-Cocoa": "12.2.2",
+        "pyobjc-framework-WebKit": "12.2.2"
+      },
+      "receipt_sha256": "1bf5c46e5504c879d0c7f6d4444ea5c304bf8fa3d18b1825efbb2357d78c430d",
+      "comparison": {
+        "expected_records": 11,
+        "actual_records": 11,
+        "matched_records": 11,
+        "missing_records": 0,
+        "unexpected_records": 0,
+        "duplicate_records": 0,
+        "field_mismatches": 0
+      },
+      "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+      "missing_wal_comparison": {
+        "expected_records": 10,
+        "actual_records": 10,
+        "matched_records": 10,
+        "missing_records": 0,
+        "unexpected_records": 0,
+        "duplicate_records": 0,
+        "field_mismatches": 0
+      },
+      "originals_unchanged": true,
+      "source_inspection_verification": {
+        "ok": true,
+        "bytes_checked": 4096,
+        "window_sha256": "3947a16ae37056403904623bc2d8a8d220d037a50681378b578ce6853dce80a0"
+      },
+      "export_verification": {
+        "ok": true,
+        "files_checked": 7,
+        "manifest_sha256": "56c15dcfe9e3eb931a418b1db5a4c1d4fb5eb22722faa8cb8db7f16be9a70cb7",
+        "selected_source": {
+          "logical_path": "data/user_de/0/com.android.providers.telephony/databases/mmssms.db",
+          "source_ref": "sms:_id=2",
+          "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
+          "body": "<img src=x onerror=\"window.evidenceExecuted=true\">"
+        },
+        "package_counts": {
+          "unique_cited_artifacts": 1,
+          "entries": 1
+        }
+      },
+      "restart": {
+        "ok": true,
+        "initial_pid": 65107,
+        "reopened_pid": 65255,
+        "new_process": true,
+        "approval_persisted": true,
+        "export_verified": true
+      }
+    },
+    "Windows": {
+      "execution_origin": "GitHub-hosted native application",
+      "job_url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39437995604/job/118680036621",
+      "platform": "Windows-10-10.0.26100-SP0",
+      "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+      "sqlite_version": "3.45.1",
+      "renderer": "edgechromium",
+      "package_versions": {
+        "lawliet-mobile": "0.1.0",
+        "pywebview": "6.2.1"
+      },
+      "receipt_sha256": "7e0711718daf5b9d443a8f7c02739626c0773120c6a886e750f29527c16d885c",
+      "comparison": {
+        "expected_records": 11,
+        "actual_records": 11,
+        "matched_records": 11,
+        "missing_records": 0,
+        "unexpected_records": 0,
+        "duplicate_records": 0,
+        "field_mismatches": 0
+      },
+      "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+      "missing_wal_comparison": {
+        "expected_records": 10,
+        "actual_records": 10,
+        "matched_records": 10,
+        "missing_records": 0,
+        "unexpected_records": 0,
+        "duplicate_records": 0,
+        "field_mismatches": 0
+      },
+      "originals_unchanged": true,
+      "source_inspection_verification": {
+        "ok": true,
+        "bytes_checked": 4096,
+        "window_sha256": "3947a16ae37056403904623bc2d8a8d220d037a50681378b578ce6853dce80a0"
+      },
+      "export_verification": {
+        "ok": true,
+        "files_checked": 7,
+        "manifest_sha256": "5f88c34006b23096ae74762ac717416d121a71b49989fcc88aa93b44ef961cff",
+        "selected_source": {
+          "logical_path": "data/user_de/0/com.android.providers.telephony/databases/mmssms.db",
+          "source_ref": "sms:_id=2",
+          "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
+          "body": "<img src=x onerror=\"window.evidenceExecuted=true\">"
+        },
+        "package_counts": {
+          "unique_cited_artifacts": 1,
+          "entries": 1
+        }
+      },
+      "restart": {
+        "ok": true,
+        "initial_pid": 2420,
+        "reopened_pid": 7924,
+        "new_process": true,
+        "approval_persisted": true,
+        "export_verified": true
+      }
+    },
+    "Linux": {
+      "execution_origin": "GitHub-hosted native application under Xvfb",
+      "job_url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39437995604/job/118680036002",
+      "platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+      "python": "3.11.17 (main, Oct  1 2026, 14:32:31) [GCC 13.3.0]",
+      "sqlite_version": "3.45.1",
+      "renderer": "qt",
+      "package_versions": {
+        "lawliet-mobile": "0.1.0",
+        "pywebview": "6.2.1"
+      },
+      "receipt_sha256": "e7eec7e35bb2c7532ac95ab4db67452d51173910e689b12f5822694673f5317a",
+      "comparison": {
+        "expected_records": 11,
+        "actual_records": 11,
+        "matched_records": 11,
+        "missing_records": 0,
+        "unexpected_records": 0,
+        "duplicate_records": 0,
+        "field_mismatches": 0
+      },
+      "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+      "missing_wal_comparison": {
+        "expected_records": 10,
+        "actual_records": 10,
+        "matched_records": 10,
+        "missing_records": 0,
+        "unexpected_records": 0,
+        "duplicate_records": 0,
+        "field_mismatches": 0
+      },
+      "originals_unchanged": true,
+      "source_inspection_verification": {
+        "ok": true,
+        "bytes_checked": 4096,
+        "window_sha256": "3947a16ae37056403904623bc2d8a8d220d037a50681378b578ce6853dce80a0"
+      },
+      "export_verification": {
+        "ok": true,
+        "files_checked": 7,
+        "manifest_sha256": "7cda6abddcc4dd8a4231b7be71c552b519c1ff567728f5e4648dd34f9d5b519b",
+        "selected_source": {
+          "logical_path": "data/user_de/0/com.android.providers.telephony/databases/mmssms.db",
+          "source_ref": "sms:_id=2",
+          "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
+          "body": "<img src=x onerror=\"window.evidenceExecuted=true\">"
+        },
+        "package_counts": {
+          "unique_cited_artifacts": 1,
+          "entries": 1
+        }
+      },
+      "restart": {
+        "ok": true,
+        "initial_pid": 3088,
+        "reopened_pid": 3508,
+        "new_process": true,
+        "approval_persisted": true,
+        "export_verified": true
+      }
+    }
+  },
+  "excludes": [
+    "physical acquisition",
+    "external parsers",
+    "AI reasoning",
+    "independent human examiner approval",
+    "full Windows backend qualification"
+  ],
+  "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76"
+}

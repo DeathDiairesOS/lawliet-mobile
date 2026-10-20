@@ -37,7 +37,8 @@
         "test_android_workflow.AndroidWorkflowTests.test_empty_successful_backup_not_claimed_collected"
       ],
       "reason": "Provider collection/staging still invokes POSIX-only directory APIs; diagnostic collection also has downstream incomplete-state assertions. Existing-evidence native review does not invoke these collectors.",
-      "status": "not_changed"
+      "status": "not_changed",
+      "followup_failure_entries": 46
     },
     {
       "id": "optional_file_fixture_semantics",
@@ -52,7 +53,8 @@
         "test_archive_cache.ArchiveCache.test_fifo_output_refused_without_open"
       ],
       "reason": "Archive-cache tests assume POSIX FIFO APIs or a POSIX read hook. The supplied-directory review workflow does not use the optional archive-member cache.",
-      "status": "not_changed"
+      "status": "not_changed",
+      "followup_failure_entries": 2
     },
     {
       "id": "archive_publication_platform_bug",
@@ -68,7 +70,8 @@
         "test_bounded_archives.BoundedArchivesTests.test_zero_filled_compressed_image_is_not_an_empty_tar"
       ],
       "reason": "Mulder general-archive decode calls os.replace on an existing empty directory, which Windows rejects. The selected supplied-directory native import workflow does not call this helper.",
-      "status": "not_changed"
+      "status": "not_changed",
+      "followup_failure_entries": 3
     },
     {
       "id": "linux_container_worker_fixture_target",
@@ -90,7 +93,8 @@
         "test_native_container_codec_worker.CodecWorkerTests.test_actual_media_semantic_file_binding"
       ],
       "reason": "Tests execute Linux container-worker implementations directly in the Windows host interpreter; those workers require O_NOFOLLOW. No Windows container execution qualification is implied.",
-      "status": "not_changed"
+      "status": "not_changed",
+      "followup_failure_entries": 60
     },
     {
       "id": "optional_container_fixture_semantics",
@@ -112,7 +116,8 @@
         "test_exif_recovery_registration.Registration.test_legacy_full_unique_terminal_can_move_and_offline_open"
       ],
       "reason": "Optional container tests assume AF_UNIX, FIFO creation, POSIX permissions or renaming a case while its SQLite connection is open. These fixtures need separate platform-aware qualification.",
-      "status": "not_changed"
+      "status": "not_changed",
+      "followup_failure_entries": 13
     },
     {
       "id": "container_host_platform_gaps",
@@ -131,7 +136,8 @@
         "test_native_container_review_boundary.StagingBoundary.test_nested_link_and_existing_leaf_refuse"
       ],
       "reason": "Optional container staging/recovery uses O_DIRECTORY and POSIX path-bound registration assumptions. The selected workflow uses host native parsing without containers.",
-      "status": "not_changed"
+      "status": "not_changed",
+      "followup_failure_entries": 27
     },
     {
       "id": "review_boundary_fixture_semantics",
@@ -149,7 +155,8 @@
         "test_export_boundaries.ExportBoundaryTests.test_failure_cleanup_preserves_replaced_file"
       ],
       "reason": "Windows retained handles deny write/delete before POSIX replacement hooks can run. The tests also assumed chmod bits or a POSIX publication syscall. Assertions now exercise actual Windows protection, cleanup and collision preservation; POSIX checks remain.",
-      "status": "adapted_pending_native_ci"
+      "status": "passed_windows_native_ci",
+      "followup_failure_entries": 0
     },
     {
       "id": "sqlite_and_package_boundary_fixture_semantics",
@@ -167,7 +174,8 @@
         "test_package_verification.PackageVerificationTests.test_symlinks_hardlinks_and_fifo_refused"
       ],
       "reason": "Windows retained handles refuse parent/leaf replacement before POSIX mutation fixtures expect it, and Windows has no POSIX FIFO API. Tests now assert real Windows replacement refusal, verified retained bytes, failed-receipt recovery and nonregular-file rejection while preserving POSIX mutation/FIFO assertions. Package verification accepts the documented boundary exception families. No production guard was relaxed.",
-      "status": "adapted_pending_native_ci"
+      "status": "passed_windows_native_ci",
+      "followup_failure_entries": 0
     },
     {
       "id": "signal_windows_capability_refusal",
@@ -184,7 +192,8 @@
         "test_signal_customer_intake.SignalCustomerIntakeTests.test_decoder_input_mutation_fails_without_importing_derived_evidence"
       ],
       "reason": "Secure Signal passphrase transport explicitly requires macOS/Linux. Synthetic decoder tests expect later states despite this intentional Windows capability refusal.",
-      "status": "not_changed"
+      "status": "not_changed",
+      "followup_failure_entries": 8
     },
     {
       "id": "development_watch_tool_platform",
@@ -198,7 +207,8 @@
         "unittest.loader._FailedTest.test_handoff_watch"
       ],
       "reason": "The development handoff watcher imports fcntl. It is not part of the evidence-review desktop workflow.",
-      "status": "not_changed"
+      "status": "not_changed",
+      "followup_failure_entries": 1
     },
     {
       "id": "leapp_fixture_newlines",
@@ -212,11 +222,32 @@
         "test_leapp_review.LeappReviewTests.test_discord_reports_keep_account_and_report_scopes_and_exact_content"
       ],
       "reason": "The multiline TSV fixture uses csv.DictWriter without newline=\"\", so Windows changes the written content. Native Android parsing in the selected workflow does not import this LEAPP fixture.",
-      "status": "not_changed"
+      "status": "not_changed",
+      "followup_failure_entries": 1
     }
   ],
   "scope_totals": {
     "in_scope_failure_entries": 26,
     "out_of_scope_failure_entries": 161
+  },
+  "followup": {
+    "commit": "f60ee2d",
+    "workflow_run": 39436495158,
+    "job_id": 118674758127,
+    "job_url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39436495158/job/118674758127",
+    "platform": "windows-latest",
+    "python": "3.11.9",
+    "tests_run": 1426,
+    "failures": 29,
+    "errors": 132,
+    "skipped": 360,
+    "failure_entries": 161,
+    "cleared_baseline_failure_entries": 26,
+    "new_failure_entries": 0,
+    "remaining_in_scope_failure_entries": 0,
+    "remaining_out_of_scope_failure_entries": 161,
+    "selected_boundary_tests_passed": 71,
+    "selected_boundary_tests_skipped": 0,
+    "comparison": "Exact multiset comparison of failure/error titles, including subtest parameters, against the baseline: the 161 remaining entries equal the classified out-of-scope baseline entries. All 71 tests in the six selected boundary modules completed with ok; none were skipped. The full Windows suite remains failed outside this bounded qualification."
   }
 }

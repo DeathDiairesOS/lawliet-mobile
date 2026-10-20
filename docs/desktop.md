@@ -11,16 +11,24 @@ is separate from desktop rendering support.
 
 ## Validation status
 
-The installed native window passed the synthetic case-to-report flow on all three
-hosts in [run 39189489660](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39189489660).
-This establishes the desktop workflow; it does not establish identical forensic
-tool coverage or physical phone acquisition on every OS.
+The expanded qualification compares frozen Android evidence with independent
+expected fields, exercises the actual review/approval/export controls and reopens
+the case in a new process. At `53dc5bc`, all three native hosts returned the same
+eleven expected observations with no missing, extra or misrepresented fields:
+macOS locally, and Windows/Linux in
+[run 39437995604](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39437995604).
+The [retained comparison](desktop-qualification-result.json) identifies each
+environment and receipt hash. Hosted macOS and the CI aggregate were still queued
+at publication; they are not represented as successful CI jobs.
 
-| Host | Native desktop workflow | Backend qualification | Restricted agent collection endpoint |
-| --- | --- | --- | --- |
-| macOS | Passed, system WebKit | Required CLI checks and Apple Silicon installation pass | macOS only; separate qualified Mulder setup |
-| Windows | Passed, WebView2 | Review preview; broader regression suite still fails | Unavailable on this host |
-| Linux | Passed, Qt under Xvfb | Required CLI checks pass | Unavailable on this host |
+| Host | Expanded native desktop workflow | Remaining scope |
+| --- | --- | --- |
+| macOS | macOS 26.7.1 arm64, local system WebKit pass; hosted macOS 15 pending | Restricted agent endpoint requires a separately qualified Mulder setup |
+| Windows | Windows Server 2025 hosted runner, WebView2 pass | Review preview; broader backend and device collection remain incompletely qualified |
+| Linux | Ubuntu 24.04 x86_64, Qt under Xvfb pass | Physical collection and optional tools require separate checks |
+
+These are bounded existing-evidence checks. They do not establish identical
+forensic-tool coverage or phone acquisition capabilities on every OS.
 
 The native smoke tests use the same Python backend as the CLI. Optional upstream
 parsers, local device drivers, USB interactions and provider configuration still
@@ -118,14 +126,11 @@ retained bundle and its validated provenance; raw arbitrary JSON is not accepted
 
 ## Current limits
 
-- Windows backend qualification remains incomplete. At `e928391`, the Python
-  3.14 broad suite ran 1,392 tests and reported 36 failures and 151 errors (351
-  skips). The targeted ownership tests and expanded native GUI passed separately.
-  Remaining issues include POSIX-specific provider collection staging, container
-  workflows and test fixtures. These are not all harmless test differences. Treat
-  Windows as a review preview; do not use its collection routes on customer phones
-  until method-specific qualification is complete. The restricted agent endpoint
-  remains macOS-only. [Broad run](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39189489574).
+- Windows remains a review preview. See the
+  [qualification scope and remaining failures](desktop-qualification.md#windows-baseline-and-remaining-scope)
+  and [failure classification](windows-review-failure-classification.json).
+  A passing native review workflow does not clear the broader backend or qualify
+  collection on customer phones. The restricted agent endpoint remains macOS-only.
 - No one-click signed Windows/Linux installer is included yet. The installed
   `lawliet-desktop` entry point launches the desktop application from its venv.
 - Optional forensic tools, physical USB methods and remote providers need separate
@@ -139,23 +144,36 @@ retained bundle and its validated provenance; raw arbitrary JSON is not accepted
 
 ## Validation and trust boundary
 
-Run `python -m unittest tests.test_desktop_bridge tests.test_case_catalog -v` for
-real synthetic backend/bridge checks without GUI dependencies. Run a native-window
-smoke with an empty dedicated workspace:
+Run `python -m unittest tests.test_android_qualification tests.test_desktop_bridge tests.test_desktop_smoke_controller -v`
+for synthetic parser, bridge and receipt checks without GUI dependencies. Run a
+native-window qualification with an empty dedicated workspace and a new result
+path:
 
 ```sh
 python -m lawliet_mobile.desktop --workspace /tmp/lawliet-desktop-check \
   --smoke-test /tmp/lawliet-desktop-result.json
 ```
 
-Use unused local paths on Windows instead of `/tmp`. The smoke actually creates,
-imports, parses, filters and searches artifacts, opens source details, submits a
-read-only SQLite query through the actual dialog, verifies a media preview, saves
-a finding, opens a report and rechecks evidence hashes. It also checks that an
-HTML-looking source message remains literal text. It performs no USB discovery, collection,
-model calls, report approval or customer release. A result of `ok: true` is scoped
-to those synthetic checks. `.github/workflows/desktop.yml` runs the window check
-on Windows, macOS and Linux and retains the result and logs.
+Use unused local paths on Windows instead of `/tmp`. The test creates and imports
+through the actual forms, compares parsed fields and provenance with the frozen
+oracle, filters the timeline, inspects source bytes, queries SQLite including WAL
+records, previews media and saves a finding. It checks visible missing-input errors
+and a missing-WAL control. Instruction-like and HTML-looking messages must remain
+literal evidence text.
+
+The test prepares a report, verifies export is disabled before approval, records
+an explicit **synthetic-only** examiner declaration and exports locally. It checks
+the complete package and exact selected citation, then launches a fresh native
+process to reopen the case and approved report. Source hashes must remain equal
+to the frozen inventory. No phone is discovered or collected, no model is called,
+and no report is delivered to a customer. Synthetic paths replace only the OS
+file picker; the application's import, approval and export handlers still run.
+
+The receipt, restart log and synthetic fixture are retained beside the selected
+output path for replay. A result of `ok: true` applies to this bounded corpus and
+workflow. The [qualification guide](desktop-qualification.md) describes independent
+answer checks and host comparison. `.github/workflows/desktop.yml` runs installed
+native windows on all three hosts and uploads synthetic receipts and logs.
 
 The application loads only packaged HTML/CSS/JavaScript; evidence is rendered as
 text, never as an HTML report. CSP blocks network resources and unapproved scripts.

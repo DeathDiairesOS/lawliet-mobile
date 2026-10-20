@@ -13,6 +13,10 @@ Windows/macOS/Linux desktop is now available for testing; see
 [desktop installation and capability boundaries](docs/desktop.md). Windows
 backend qualification is still in progress, and Windows CLI CI remains advisory.
 Do not interpret a successful workflow badge as complete Windows qualification.
+The [bounded desktop qualification](docs/desktop-qualification.md) checks frozen
+Android evidence against independent expected fields, through native review,
+synthetic approval/local export and a fresh-process restart. It does not qualify
+physical collection, external parsers or AI reasoning.
 
 This is an initial working release with a limited native support matrix. Physical
 collection validation is method-specific; successful collection does not establish
@@ -312,17 +316,20 @@ not provide protection against loss of that disk; keep an approved separate copy
 ## Fresh-machine acceptance
 
 A fresh clone is the acceptance target. Use Python 3.11+ for the backend. Building
-the native macOS desktop also requires Apple's command-line developer tools
-(`xcode-select --install`) and a Swift compiler. The native desktop is macOS-only;
-the backend CLI has separate platform coverage.
+the Swift macOS desktop also requires Apple's command-line developer tools
+(`xcode-select --install`) and a Swift compiler. For the shared Windows/macOS/Linux
+application, follow [desktop installation and qualification](docs/desktop.md).
+The shared GUI, Swift GUI and backend CLI have separate acceptance scopes.
 
 1. Clone this repository and record the Git commit being tested.
 2. Run `python3 tools/repository_preflight.py` and
    `python3 -m unittest discover -s tests`. Record failures and skips separately.
 3. Run `python3 -m lawliet_mobile demo --workspace /path/to/test-cases --json`, then
    `python3 -m lawliet_mobile verify --case demo --workspace /path/to/test-cases --json`.
-4. Build with `python3 desktop/build.py --workspace /path/to/cases --output "/path/to/LAWLIET.app"`.
-   Keep the selected Python interpreter available: the app records its path.
+4. For the Swift macOS app, build with `python3 desktop/build.py --workspace /path/to/cases --output "/path/to/LAWLIET.app"`.
+   Keep the selected Python interpreter available: the app records its path. For
+   the shared app, install its desktop extra and run the documented native-window
+   qualification with a new synthetic workspace before reviewing supplied evidence.
 5. Install/configure the tools required by the accepted workflow. Run
    `python3 -m lawliet_mobile doctor --workspace /path/to/cases --json`. Presence
    checks do not establish compatibility or successful parsing.
