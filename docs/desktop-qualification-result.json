@@ -1,206 +1,537 @@
 {
   "schema_version": 1,
-  "date": "2026-10-20",
-  "commit": "53dc5bc0a82a488d600019a52ac66778f41dcfd3",
-  "scope": "Frozen Android directory -> native import and indexing -> desktop inspection -> examiner finding -> synthetic approval -> local report export -> new-process restart",
   "ok": true,
-  "hosted_macos_ci": "Queued at time of this comparison; macOS result below is an actual local native run, not a hosted CI result.",
-  "corpus_sha256": "6ac86a307f18af7f3a5443599ac3df519a6e046a0d27d5e80df139cfa8b6aefb",
-  "oracle_sha256": "90bed257960deebd255b99c3b36c3c1f9bd8e7e1ed2e52c5d8bb1653f04ce3a8",
-  "hosts": {
-    "macOS": {
-      "execution_origin": "local native application",
-      "job_url": null,
-      "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
-      "python": "3.13.14 (main, Jun 10 2026, 12:24:04) [Clang 17.0.0 (clang-1700.6.4.2)]",
-      "sqlite_version": "3.54.0",
-      "renderer": "cocoa",
-      "package_versions": {
-        "lawliet-mobile": "0.1.0",
-        "pywebview": "6.2.1",
-        "pyobjc-core": "12.2.2",
-        "pyobjc-framework-Cocoa": "12.2.2",
-        "pyobjc-framework-WebKit": "12.2.2"
-      },
-      "receipt_sha256": "1bf5c46e5504c879d0c7f6d4444ea5c304bf8fa3d18b1825efbb2357d78c430d",
-      "comparison": {
-        "expected_records": 11,
-        "actual_records": 11,
-        "matched_records": 11,
-        "missing_records": 0,
-        "unexpected_records": 0,
-        "duplicate_records": 0,
-        "field_mismatches": 0
-      },
-      "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
-      "missing_wal_comparison": {
-        "expected_records": 10,
-        "actual_records": 10,
-        "matched_records": 10,
-        "missing_records": 0,
-        "unexpected_records": 0,
-        "duplicate_records": 0,
-        "field_mismatches": 0
-      },
-      "originals_unchanged": true,
-      "source_inspection_verification": {
-        "ok": true,
-        "bytes_checked": 4096,
-        "window_sha256": "3947a16ae37056403904623bc2d8a8d220d037a50681378b578ce6853dce80a0"
-      },
-      "export_verification": {
-        "ok": true,
-        "files_checked": 7,
-        "manifest_sha256": "56c15dcfe9e3eb931a418b1db5a4c1d4fb5eb22722faa8cb8db7f16be9a70cb7",
-        "selected_source": {
-          "logical_path": "data/user_de/0/com.android.providers.telephony/databases/mmssms.db",
-          "source_ref": "sms:_id=2",
-          "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
-          "body": "<img src=x onerror=\"window.evidenceExecuted=true\">"
-        },
-        "package_counts": {
-          "unique_cited_artifacts": 1,
-          "entries": 1
-        }
-      },
-      "restart": {
-        "ok": true,
-        "initial_pid": 65107,
-        "reopened_pid": 65255,
-        "new_process": true,
-        "approval_persisted": true,
-        "export_verified": true
-      }
-    },
-    "Windows": {
-      "execution_origin": "GitHub-hosted native application",
-      "job_url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39437995604/job/118680036621",
-      "platform": "Windows-10-10.0.26100-SP0",
-      "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
-      "sqlite_version": "3.45.1",
-      "renderer": "edgechromium",
-      "package_versions": {
-        "lawliet-mobile": "0.1.0",
-        "pywebview": "6.2.1"
-      },
-      "receipt_sha256": "7e0711718daf5b9d443a8f7c02739626c0773120c6a886e750f29527c16d885c",
-      "comparison": {
-        "expected_records": 11,
-        "actual_records": 11,
-        "matched_records": 11,
-        "missing_records": 0,
-        "unexpected_records": 0,
-        "duplicate_records": 0,
-        "field_mismatches": 0
-      },
-      "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
-      "missing_wal_comparison": {
-        "expected_records": 10,
-        "actual_records": 10,
-        "matched_records": 10,
-        "missing_records": 0,
-        "unexpected_records": 0,
-        "duplicate_records": 0,
-        "field_mismatches": 0
-      },
-      "originals_unchanged": true,
-      "source_inspection_verification": {
-        "ok": true,
-        "bytes_checked": 4096,
-        "window_sha256": "3947a16ae37056403904623bc2d8a8d220d037a50681378b578ce6853dce80a0"
-      },
-      "export_verification": {
-        "ok": true,
-        "files_checked": 7,
-        "manifest_sha256": "5f88c34006b23096ae74762ac717416d121a71b49989fcc88aa93b44ef961cff",
-        "selected_source": {
-          "logical_path": "data/user_de/0/com.android.providers.telephony/databases/mmssms.db",
-          "source_ref": "sms:_id=2",
-          "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
-          "body": "<img src=x onerror=\"window.evidenceExecuted=true\">"
-        },
-        "package_counts": {
-          "unique_cited_artifacts": 1,
-          "entries": 1
-        }
-      },
-      "restart": {
-        "ok": true,
-        "initial_pid": 2420,
-        "reopened_pid": 7924,
-        "new_process": true,
-        "approval_persisted": true,
-        "export_verified": true
-      }
-    },
-    "Linux": {
-      "execution_origin": "GitHub-hosted native application under Xvfb",
-      "job_url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39437995604/job/118680036002",
-      "platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
-      "python": "3.11.17 (main, Oct  1 2026, 14:32:31) [GCC 13.3.0]",
-      "sqlite_version": "3.45.1",
-      "renderer": "qt",
-      "package_versions": {
-        "lawliet-mobile": "0.1.0",
-        "pywebview": "6.2.1"
-      },
-      "receipt_sha256": "e7eec7e35bb2c7532ac95ab4db67452d51173910e689b12f5822694673f5317a",
-      "comparison": {
-        "expected_records": 11,
-        "actual_records": 11,
-        "matched_records": 11,
-        "missing_records": 0,
-        "unexpected_records": 0,
-        "duplicate_records": 0,
-        "field_mismatches": 0
-      },
-      "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
-      "missing_wal_comparison": {
-        "expected_records": 10,
-        "actual_records": 10,
-        "matched_records": 10,
-        "missing_records": 0,
-        "unexpected_records": 0,
-        "duplicate_records": 0,
-        "field_mismatches": 0
-      },
-      "originals_unchanged": true,
-      "source_inspection_verification": {
-        "ok": true,
-        "bytes_checked": 4096,
-        "window_sha256": "3947a16ae37056403904623bc2d8a8d220d037a50681378b578ce6853dce80a0"
-      },
-      "export_verification": {
-        "ok": true,
-        "files_checked": 7,
-        "manifest_sha256": "7cda6abddcc4dd8a4231b7be71c552b519c1ff567728f5e4648dd34f9d5b519b",
-        "selected_source": {
-          "logical_path": "data/user_de/0/com.android.providers.telephony/databases/mmssms.db",
-          "source_ref": "sms:_id=2",
-          "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
-          "body": "<img src=x onerror=\"window.evidenceExecuted=true\">"
-        },
-        "package_counts": {
-          "unique_cited_artifacts": 1,
-          "entries": 1
-        }
-      },
-      "restart": {
-        "ok": true,
-        "initial_pid": 3088,
-        "reopened_pid": 3508,
-        "new_process": true,
-        "approval_persisted": true,
-        "export_verified": true
-      }
-    }
-  },
+  "commit": "59c4f355ec0637644866877a400189bfc4899055",
+  "scope": "Synthetic Android subprocess acquisition, import, native parsing, desktop review and local report export",
   "excludes": [
     "physical acquisition",
     "external parsers",
     "AI reasoning",
-    "independent human examiner approval",
-    "full Windows backend qualification"
+    "independent human examiner sign-off"
   ],
-  "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76"
+  "hosts": {
+    "macos-15-intel": {
+      "environment": {
+        "commit": "59c4f355ec0637644866877a400189bfc4899055",
+        "runner_os": "macOS",
+        "platform": "macOS-15.7.9-x86_64-i386-64bit",
+        "python": "3.11.9 (v3.11.9:de54cf5be3, Apr  2 2024, 07:12:50) [Clang 13.0.0 (clang-1300.0.29.30)]",
+        "renderer": "cocoa",
+        "evidence": "frozen synthetic Android corpus only",
+        "sqlite_version": "3.45.1",
+        "package_versions": {
+          "lawliet-mobile": "0.1.0",
+          "pywebview": "6.2.1"
+        }
+      },
+      "corpus_sha256": "6ac86a307f18af7f3a5443599ac3df519a6e046a0d27d5e80df139cfa8b6aefb",
+      "oracle_sha256": "90bed257960deebd255b99c3b36c3c1f9bd8e7e1ed2e52c5d8bb1653f04ce3a8",
+      "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+      "expected_field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+      "comparison": {
+        "expected_records": 11,
+        "actual_records": 11,
+        "matched_records": 11,
+        "missing_records": 0,
+        "unexpected_records": 0,
+        "duplicate_records": 0,
+        "field_mismatches": 0
+      },
+      "restart": {
+        "ok": true,
+        "initial_pid": 1961,
+        "reopened_pid": 3412,
+        "new_process": true,
+        "case_id": "DESKTOP-SMOKE",
+        "report_id": "a18adda24f4a4486a86025c59245d140",
+        "approval_persisted": true,
+        "export_verified": true,
+        "collection_verified": true,
+        "steps": [
+          {
+            "step": "search_source_inspector_ui",
+            "matched_rows": 1,
+            "literal_text_preserved": true,
+            "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
+            "timestamp": "2024-01-01T00:01:00.456000Z",
+            "timestamp_raw": "1704067260456"
+          },
+          {
+            "step": "report_reopened_ui",
+            "id": "a18adda24f4a4486a86025c59245d140",
+            "approval_persisted": true
+          },
+          {
+            "step": "collection_report_ui",
+            "phase": "reopen",
+            "records": 10,
+            "source_sha256": "89dce996e61d209f692311309f4f5bde6a8e170682d9c73334c2c4b7d203d1a3",
+            "report_id": "9fad41a035be4f57a6123b8c01027801"
+          },
+          {
+            "step": "integrity",
+            "result": {
+              "ok": true,
+              "files_checked": 9,
+              "findings_checked": 1,
+              "investigation_ledger": {
+                "investigations_checked": 1,
+                "events_checked": 1,
+                "legacy_partial_receipts": 0,
+                "audit_head": "43b927903b244e4ee15f39f78f1d612460330d91e4dbdce2c064f3dfc4debf3f"
+              },
+              "engine_outputs_checked": 0,
+              "audit_head": "43b927903b244e4ee15f39f78f1d612460330d91e4dbdce2c064f3dfc4debf3f",
+              "failures": []
+            }
+          }
+        ]
+      },
+      "originals_unchanged": true,
+      "collection": {
+        "ok": true,
+        "case_id": "DESKTOP-COLLECTION",
+        "profiles": [
+          "sms-provider",
+          "contacts-provider",
+          "files",
+          "triage",
+          "trash-photos"
+        ],
+        "records_checked": 10,
+        "field_fingerprint_sha256": "c5d8ce901a6e0868e4d67ecac8ac6ea0568d7d3748f1aebb8143afcadc0895e7",
+        "source_hashes_verified": true,
+        "report_verified": true,
+        "transport_sha256": "bc5406299aa959fd51ca37819f06207e353963b0a04dd72e3e509555891d83ca",
+        "transport_calls_sha256": "9a0eea3a73e2c0c9ccab41e1e1c9b0c2559371c6c754e6dbb1af34e5c86881f0",
+        "transport": "synthetic subprocess; no physical USB",
+        "report": {
+          "id": "9fad41a035be4f57a6123b8c01027801",
+          "manifest_sha256": "d491fe84a23d9ebca4bf002d9bea4162e1f8646eb46b15887a69ed3f33b03850"
+        }
+      },
+      "receipt_path": "desktop-smoke-macos-15-intel/result.json",
+      "receipt_sha256": "8212735fd9ac4223601f0c791ba3a5cf9f36b732fef8f1d13e19336395096404"
+    },
+    "ubuntu-24.04": {
+      "environment": {
+        "commit": "59c4f355ec0637644866877a400189bfc4899055",
+        "runner_os": "Linux",
+        "platform": "Linux-7.0.0-1017-azure-x86_64-with-glibc2.39",
+        "python": "3.11.17 (main, Oct  1 2026, 14:32:31) [GCC 13.3.0]",
+        "renderer": "qt",
+        "evidence": "frozen synthetic Android corpus only",
+        "sqlite_version": "3.45.1",
+        "package_versions": {
+          "lawliet-mobile": "0.1.0",
+          "pywebview": "6.2.1"
+        }
+      },
+      "corpus_sha256": "6ac86a307f18af7f3a5443599ac3df519a6e046a0d27d5e80df139cfa8b6aefb",
+      "oracle_sha256": "90bed257960deebd255b99c3b36c3c1f9bd8e7e1ed2e52c5d8bb1653f04ce3a8",
+      "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+      "expected_field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+      "comparison": {
+        "expected_records": 11,
+        "actual_records": 11,
+        "matched_records": 11,
+        "missing_records": 0,
+        "unexpected_records": 0,
+        "duplicate_records": 0,
+        "field_mismatches": 0
+      },
+      "restart": {
+        "ok": true,
+        "initial_pid": 2953,
+        "reopened_pid": 3662,
+        "new_process": true,
+        "case_id": "DESKTOP-SMOKE",
+        "report_id": "619b826e0c2942788c5cfaba87831a85",
+        "approval_persisted": true,
+        "export_verified": true,
+        "collection_verified": true,
+        "steps": [
+          {
+            "step": "search_source_inspector_ui",
+            "matched_rows": 1,
+            "literal_text_preserved": true,
+            "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
+            "timestamp": "2024-01-01T00:01:00.456000Z",
+            "timestamp_raw": "1704067260456"
+          },
+          {
+            "step": "report_reopened_ui",
+            "id": "619b826e0c2942788c5cfaba87831a85",
+            "approval_persisted": true
+          },
+          {
+            "step": "collection_report_ui",
+            "phase": "reopen",
+            "records": 10,
+            "source_sha256": "53e56c204d12eef1c52f07720b186192c114dbb4fbafbde1d559b1937c469ba2",
+            "report_id": "2e32b14af0e34bae98b2263c41b712d5"
+          },
+          {
+            "step": "integrity",
+            "result": {
+              "ok": true,
+              "files_checked": 9,
+              "findings_checked": 1,
+              "investigation_ledger": {
+                "investigations_checked": 1,
+                "events_checked": 1,
+                "legacy_partial_receipts": 0,
+                "audit_head": "5834b476e5daa5d49580e4b297662060af8a2d2a28bee13df3bbbc9412d75ea7"
+              },
+              "engine_outputs_checked": 0,
+              "audit_head": "5834b476e5daa5d49580e4b297662060af8a2d2a28bee13df3bbbc9412d75ea7",
+              "failures": []
+            }
+          }
+        ]
+      },
+      "originals_unchanged": true,
+      "collection": {
+        "ok": true,
+        "case_id": "DESKTOP-COLLECTION",
+        "profiles": [
+          "sms-provider",
+          "contacts-provider",
+          "files",
+          "triage",
+          "trash-photos"
+        ],
+        "records_checked": 10,
+        "field_fingerprint_sha256": "c5d8ce901a6e0868e4d67ecac8ac6ea0568d7d3748f1aebb8143afcadc0895e7",
+        "source_hashes_verified": true,
+        "report_verified": true,
+        "transport_sha256": "bc5406299aa959fd51ca37819f06207e353963b0a04dd72e3e509555891d83ca",
+        "transport_calls_sha256": "00e657e3486afd92a0fba42871d394c9cba7c99bacaed97a86ee6bfc2add4485",
+        "transport": "synthetic subprocess; no physical USB",
+        "report": {
+          "id": "2e32b14af0e34bae98b2263c41b712d5",
+          "manifest_sha256": "b48781057685580e1d7ee55083cc1707b7ae6f9c7d1f8d27a154a5c63d0cc055"
+        }
+      },
+      "receipt_path": "desktop-smoke-ubuntu-24.04/result.json",
+      "receipt_sha256": "4aa00a32d9a2360e1c5c4d64c48851ef37c9c04f341899f0f136ed88c42a6975"
+    },
+    "windows-latest": {
+      "environment": {
+        "commit": "59c4f355ec0637644866877a400189bfc4899055",
+        "runner_os": "Windows",
+        "platform": "Windows-10-10.0.26100-SP0",
+        "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+        "renderer": "edgechromium",
+        "evidence": "frozen synthetic Android corpus only",
+        "sqlite_version": "3.45.1",
+        "package_versions": {
+          "lawliet-mobile": "0.1.0",
+          "pywebview": "6.2.1"
+        }
+      },
+      "corpus_sha256": "6ac86a307f18af7f3a5443599ac3df519a6e046a0d27d5e80df139cfa8b6aefb",
+      "oracle_sha256": "90bed257960deebd255b99c3b36c3c1f9bd8e7e1ed2e52c5d8bb1653f04ce3a8",
+      "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+      "expected_field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+      "comparison": {
+        "expected_records": 11,
+        "actual_records": 11,
+        "matched_records": 11,
+        "missing_records": 0,
+        "unexpected_records": 0,
+        "duplicate_records": 0,
+        "field_mismatches": 0
+      },
+      "restart": {
+        "ok": true,
+        "initial_pid": 1344,
+        "reopened_pid": 6140,
+        "new_process": true,
+        "case_id": "DESKTOP-SMOKE",
+        "report_id": "d4998165bc9449efbd558c54ab5c3b81",
+        "approval_persisted": true,
+        "export_verified": true,
+        "collection_verified": true,
+        "steps": [
+          {
+            "step": "search_source_inspector_ui",
+            "matched_rows": 1,
+            "literal_text_preserved": true,
+            "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
+            "timestamp": "2024-01-01T00:01:00.456000Z",
+            "timestamp_raw": "1704067260456"
+          },
+          {
+            "step": "report_reopened_ui",
+            "id": "d4998165bc9449efbd558c54ab5c3b81",
+            "approval_persisted": true
+          },
+          {
+            "step": "collection_report_ui",
+            "phase": "reopen",
+            "records": 10,
+            "source_sha256": "f35ff3de3ce3e089c470078be3a8cc2f0101c2e4eb79959d791c377f81adf87a",
+            "report_id": "a640c0eecd3e4060a02742196d874aa7"
+          },
+          {
+            "step": "integrity",
+            "result": {
+              "ok": true,
+              "files_checked": 9,
+              "findings_checked": 1,
+              "investigation_ledger": {
+                "investigations_checked": 1,
+                "events_checked": 1,
+                "legacy_partial_receipts": 0,
+                "audit_head": "c40b0b3257663aa923338b86f8be7d3146a19a1b4f197a3548f9cc8ec0b2e811"
+              },
+              "engine_outputs_checked": 0,
+              "audit_head": "c40b0b3257663aa923338b86f8be7d3146a19a1b4f197a3548f9cc8ec0b2e811",
+              "failures": []
+            }
+          }
+        ]
+      },
+      "originals_unchanged": true,
+      "collection": {
+        "ok": true,
+        "case_id": "DESKTOP-COLLECTION",
+        "profiles": [
+          "sms-provider",
+          "contacts-provider",
+          "files",
+          "triage",
+          "trash-photos"
+        ],
+        "records_checked": 10,
+        "field_fingerprint_sha256": "c5d8ce901a6e0868e4d67ecac8ac6ea0568d7d3748f1aebb8143afcadc0895e7",
+        "source_hashes_verified": true,
+        "report_verified": true,
+        "transport_sha256": "c8f8e73454631d4197fc2694cf824c7b2f1ffecf26a4ed2380cce2dd1568fea3",
+        "transport_calls_sha256": "030b928b60bd413df572f0513f54761027ff98eff94605ae4265691f9946df3e",
+        "transport": "synthetic subprocess; no physical USB",
+        "report": {
+          "id": "a640c0eecd3e4060a02742196d874aa7",
+          "manifest_sha256": "93d1786f2644f65d289630d8c5c5dc811d041ab82ba722c7c2b0aa855d764ae5"
+        }
+      },
+      "receipt_path": "desktop-smoke-windows-latest/result.json",
+      "receipt_sha256": "72198b09c9285c4c5589b6192a0c01baed18c8f5fb7b3b64042c84768e3c1087"
+    }
+  },
+  "errors": [],
+  "date": "2026-10-20",
+  "native_workflow_url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712473",
+  "backend_validation": {
+    "source_commit": "59c4f355ec0637644866877a400189bfc4899055",
+    "workflow_url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712672",
+    "receipt_sha256": "f0ee0c063daac467f38a04e44f0052bf1a9e8052872c3b80f87fe9c9fb7acf34",
+    "all_six_full_suites_passed": true,
+    "jobs": [
+      {
+        "name": "test (windows-latest, 3.14)",
+        "job_id": 118811004365,
+        "url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712672/job/118811004365",
+        "conclusion": "success",
+        "log_sha256": "43f22e2cbf1fb1ebe58e2f134e0f477242d617eba895662a6b828662e971e69d",
+        "full_suite": {
+          "tests": 1458,
+          "seconds": 646.807,
+          "result": "OK (skipped=378)",
+          "skipped": 378,
+          "failures": 0,
+          "errors": 0,
+          "expected_failures": 0,
+          "unexpected_successes": 0
+        },
+        "exception_traceback_count": 0
+      },
+      {
+        "name": "test (macos-15-intel, 3.14)",
+        "job_id": 118811004395,
+        "url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712672/job/118811004395",
+        "conclusion": "success",
+        "log_sha256": "360cd4cdd9d043242a9450f429990cb1f546ba454fdd0f1d16cd20ef4b5ae0bc",
+        "full_suite": {
+          "tests": 1458,
+          "seconds": 391.627,
+          "result": "OK (skipped=253)",
+          "skipped": 253,
+          "failures": 0,
+          "errors": 0,
+          "expected_failures": 0,
+          "unexpected_successes": 0
+        },
+        "exception_traceback_count": 0
+      },
+      {
+        "name": "test (windows-latest, 3.11)",
+        "job_id": 118811004423,
+        "url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712672/job/118811004423",
+        "conclusion": "success",
+        "log_sha256": "66e7a90a3e077215182175ee065a7892030c45f77835e3f685aa8a86d8242a0b",
+        "full_suite": {
+          "tests": 1458,
+          "seconds": 451.138,
+          "result": "OK (skipped=386)",
+          "skipped": 386,
+          "failures": 0,
+          "errors": 0,
+          "expected_failures": 0,
+          "unexpected_successes": 0
+        },
+        "exception_traceback_count": 0
+      },
+      {
+        "name": "test (ubuntu-latest, 3.14)",
+        "job_id": 118811004602,
+        "url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712672/job/118811004602",
+        "conclusion": "success",
+        "log_sha256": "f98fa5d6b0d5eef57e2f0339f2d6c4bfae89f1111ab0e093b47a3892f46e7297",
+        "full_suite": {
+          "tests": 1458,
+          "seconds": 100.116,
+          "result": "OK (skipped=306)",
+          "skipped": 306,
+          "failures": 0,
+          "errors": 0,
+          "expected_failures": 0,
+          "unexpected_successes": 0
+        },
+        "exception_traceback_count": 0
+      },
+      {
+        "name": "test (macos-15-intel, 3.11)",
+        "job_id": 118811004805,
+        "url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712672/job/118811004805",
+        "conclusion": "success",
+        "log_sha256": "107f661b70d8d3aefc7f05d38977a074cf199ec4781d6c5afd1896ef3c3945d9",
+        "full_suite": {
+          "tests": 1458,
+          "seconds": 294.498,
+          "result": "OK (skipped=261)",
+          "skipped": 261,
+          "failures": 0,
+          "errors": 0,
+          "expected_failures": 0,
+          "unexpected_successes": 0
+        },
+        "exception_traceback_count": 0
+      },
+      {
+        "name": "test (ubuntu-latest, 3.11)",
+        "job_id": 118811004871,
+        "url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712672/job/118811004871",
+        "conclusion": "success",
+        "log_sha256": "66d641e09288bc6caecb674ccc6381534a3fc76f8730c618f8c40b266d0cd8c8",
+        "full_suite": {
+          "tests": 1458,
+          "seconds": 105.194,
+          "result": "OK (skipped=306)",
+          "skipped": 306,
+          "failures": 0,
+          "errors": 0,
+          "expected_failures": 0,
+          "unexpected_successes": 0
+        },
+        "exception_traceback_count": 0
+      }
+    ],
+    "diagnostics": [
+      "No exception tracebacks or native fatal exceptions in the completed final matrix. Periodic asynchronous stack walking is disabled; fatal-crash diagnostics and all tests remain enabled."
+    ],
+    "limits": [
+      "Counts include explicit skips; each platform repeats the same suite.",
+      "GitHub combined logs do not preserve stdout versus stderr attribution.",
+      "Synthetic tests do not qualify live physical-device or Docker acquisition."
+    ]
+  },
+  "windows_focused_validation": {
+    "schema": "lawliet-native-windows-boundaries-v1",
+    "commit": "9a6c16ed3af936595a10dac251f82cf9db2722d6",
+    "run_id": 39474770942,
+    "job_id": 118807768623,
+    "job_url": "https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39474770942/job/118807768623",
+    "execution_origin": "GitHub-hosted native Windows Server 2025",
+    "python": "3.11.9",
+    "platform_image": "windows-2025-vs2026",
+    "result": "passed",
+    "test_invocations": 128,
+    "passed_invocations": 125,
+    "skipped_invocations": 3,
+    "step_invocations": [
+      24,
+      53,
+      51
+    ],
+    "checks": {
+      "test_windows_plaintext_run_is_private_and_acl_failure_preserves_existing_folders": true,
+      "test_windows_stage_is_private_before_decoding_and_acl_refusal_preserves_folders": true,
+      "test_windows_crt_prompt_private_console_job_and_no_secret_persistence": true,
+      "test_windows_decoder_descendants_are_stopped_before_output_inspection": true,
+      "test_windows_publication_race_preserves_even_empty_competing_destination": true,
+      "test_windows_failed_publish_restores_same_original_directory": true
+    },
+    "no_exception_trace": true,
+    "log_file": "windows-fast-9a6c16e.log",
+    "log_sha256": "cf70a45299b0413e1086182cf1cfdbfb2fef73e4291c63f3d23d60dc5485bc7e",
+    "limitations": [
+      "Synthetic acquisition and controlled decoder fixtures only; no physical-phone collection.",
+      "Windows Signal prompt transport is qualified; actual upstream Signal backup decoding is not qualified by this run."
+    ]
+  },
+  "local_apple_silicon": {
+    "environment": {
+      "commit": "9a6c16ed3af936595a10dac251f82cf9db2722d6",
+      "runner_os": "macOS",
+      "platform": "macOS-26.7.1-arm64-arm-64bit-Mach-O",
+      "python": "3.13.14 (main, Jun 10 2026, 12:24:04) [Clang 17.0.0 (clang-1700.6.4.2)]",
+      "renderer": "cocoa",
+      "evidence": "synthetic subprocess acquisition and frozen synthetic corpus only",
+      "sqlite_version": "3.54.0",
+      "package_versions": {
+        "lawliet-mobile": "0.1.0",
+        "pywebview": "6.2.1"
+      }
+    },
+    "ok": true,
+    "installed_files_match": 115,
+    "fresh_process_restart": true,
+    "acquired_records_checked": 10,
+    "receipt_sha256": "da9163e9675e0115e617993740bec3c2685c1520aed0df779391fd978802c68d",
+    "source_verification_sha256": "d7de24d84e3f25761b4d28a59478bd8ea9cc11cf9c783cda7a0315ee7a150ee9",
+    "runtime_matches_qualification_commit": true
+  },
+  "retained_failed_run": {
+    "source_commit": "9a6c16ed3af936595a10dac251f82cf9db2722d6",
+    "run_id": 39474770942,
+    "job_id": 118807768841,
+    "status": "failed_before_test_summary",
+    "exit_code": -1073741819,
+    "windows_exception": "0xC0000005 access violation",
+    "log_file": "full-suite-9a6-windows-311-attempt1.log",
+    "log_sha256": "f047fa74142a7af5ba2d408b060ff59811bb439f87a5a5efc3a127bdaf628692",
+    "observations": [
+      "First180s faulthandler timer fired immediately before crash.",
+      "Partial diagnostic line printed File <frozen genericpath> before Windows fatal exception.",
+      "Second diagnostic failed after showing genericpath.exists and shutil.which.",
+      "All preceding emitted test results passed/skipped; no unittest summary was produced."
+    ],
+    "hypotheses": [
+      {
+        "explanation": "Background faulthandler unsynchronized frame/code stackwalk race",
+        "status": "supported but not proven by native C stack",
+        "sources": [
+          "https://github.com/python/cpython/issues/116008",
+          "https://github.com/python/cpython/issues/140815",
+          "https://github.com/python/cpython/issues/158200"
+        ]
+      },
+      {
+        "explanation": "Earlier native memory corruption",
+        "status": "not excluded; no DACL ctypes ABI/double-free defect found in read-only review"
+      }
+    ]
+  }
 }

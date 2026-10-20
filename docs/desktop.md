@@ -11,28 +11,30 @@ is separate from desktop rendering support.
 
 ## Validation status
 
-The expanded qualification compares frozen Android evidence with independent
-expected fields, exercises the actual review/approval/export controls and reopens
-the case in a new process. At `53dc5bc`, all three native hosts returned the same
-eleven expected observations with no missing, extra or misrepresented fields:
-macOS locally, and Windows/Linux in
-[run 39437995604](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39437995604).
-The [retained comparison](desktop-qualification-result.json) identifies each
-environment and receipt hash. Hosted macOS and the CI aggregate were still queued
-at publication; they are not represented as successful CI jobs.
+At `59c4f35`, the installed native application passed the complete synthetic
+Android **collection → automatic parsing → examination → reviewed report export
+→ fresh-process restart** workflow on Windows, macOS and Linux. All three hosted
+runs and their independent-field comparison passed in
+[run 39475712473](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712473).
+The [retained comparison](desktop-qualification-result.json) identifies exact
+versions, source commit, field fingerprints and receipt hashes.
 
-| Host | Expanded native desktop workflow | Remaining scope |
+| Host | Native desktop workflow | Remaining scope |
 | --- | --- | --- |
-| macOS | macOS 26.7.1 arm64, local system WebKit pass; hosted macOS 15 pending | Restricted agent endpoint requires a separately qualified Mulder setup |
-| Windows | Windows Server 2025 hosted runner, WebView2 pass | Review preview; broader backend and device collection remain incompletely qualified |
-| Linux | Ubuntu 24.04 x86_64, Qt under Xvfb pass | Physical collection and optional tools require separate checks |
+| macOS | macOS 15.7.9 Intel, Cocoa/WebKit; supplementary local Apple Silicon pass at `9a6c16e` | Restricted agent endpoint needs a qualified Mulder setup |
+| Windows | Windows Server 2025, WebView2 | Physical USB/drivers and upstream-tool compatibility need device-specific qualification |
+| Linux | Ubuntu 24.04 x86_64, Qt/Xvfb | Physical USB permissions and upstream tools need separate checks |
 
-These are bounded existing-evidence checks. They do not establish identical
-forensic-tool coverage or phone acquisition capabilities on every OS.
+The five Android methods are SMS provider, contacts provider, explicit shared
+files, diagnostics/package inventory and accessible Trash. Their fixed synthetic
+subprocess responses produce ten expected observations. A separate frozen import
+supplies eleven observations and a missing-WAL control. Original/collected hashes,
+precise source citations and both report packages are checked. No customer data,
+physical phone, external model or customer delivery is involved.
 
-The native smoke tests use the same Python backend as the CLI. Optional upstream
-parsers, local device drivers, USB interactions and provider configuration still
-need their own checks. No customer data is included in CI.
+This establishes a working host software path; it does not establish complete
+phone access, app-private data availability or identical tool coverage on every
+OS. See the [qualification scope](desktop-qualification.md).
 
 ## Install from the reviewed repository
 
@@ -52,6 +54,9 @@ Microsoft Edge WebView2 Runtime and .NET Framework 4.8 or newer must be availabl
 The app explicitly requests Edge Chromium; it does not fall back to Internet
 Explorer. Obtain missing runtime prerequisites from Microsoft. The Python
 installation and WebView2 architecture must be compatible.
+Windows analysis staging requires a volume that supports the verified Windows
+permissions and handle operations, such as NTFS; unsupported storage returns an
+error instead of silently dropping those protections.
 
 macOS:
 
@@ -115,8 +120,8 @@ cases are copied, migrated or deleted automatically.
 
 The acquisition view uses explicit device detection, preflight and authorization
 before invoking the existing collectors. Forensic tools and device drivers must
-be installed separately. A rendered acquisition view does not prove successful
-USB collection on that OS or complete access to a phone.
+be installed separately. The synthetic subprocess qualification exercises these
+controls; actual USB collection and device permissions still require separate tests.
 
 The agent screen prepares, authorizes and monitors existing scoped plans; it does
 not create a new LLM agent or silently send evidence to a model. The restricted
@@ -126,11 +131,11 @@ retained bundle and its validated provenance; raw arbitrary JSON is not accepted
 
 ## Current limits
 
-- Windows remains a review preview. See the
-  [qualification scope and remaining failures](desktop-qualification.md#windows-baseline-and-remaining-scope)
-  and [failure classification](windows-review-failure-classification.json).
-  A passing native review workflow does not clear the broader backend or qualify
-  collection on customer phones. The restricted agent endpoint remains macOS-only.
+- The host collection workflow and broad backend suites pass on Windows, macOS
+  and Linux; see the [qualification scope](desktop-qualification.md).
+  These results do not qualify collection on customer phones. The restricted
+  Mulder collection endpoint remains macOS-only because its process sandbox is
+  platform-specific; direct collectors and the acquisition GUI work independently.
 - No one-click signed Windows/Linux installer is included yet. The installed
   `lawliet-desktop` entry point launches the desktop application from its venv.
 - Optional forensic tools, physical USB methods and remote providers need separate
@@ -151,7 +156,8 @@ path:
 
 ```sh
 python -m lawliet_mobile.desktop --workspace /tmp/lawliet-desktop-check \
-  --smoke-test /tmp/lawliet-desktop-result.json
+  --smoke-test /tmp/lawliet-desktop-result.json \
+  --smoke-collection /absolute/path/to/lawliet-mobile/tests/fixtures/collection_adb.py
 ```
 
 Use unused local paths on Windows instead of `/tmp`. The test creates and imports
@@ -165,9 +171,12 @@ The test prepares a report, verifies export is disabled before approval, records
 an explicit **synthetic-only** examiner declaration and exports locally. It checks
 the complete package and exact selected citation, then launches a fresh native
 process to reopen the case and approved report. Source hashes must remain equal
-to the frozen inventory. No phone is discovered or collected, no model is called,
-and no report is delivered to a customer. Synthetic paths replace only the OS
-file picker; the application's import, approval and export handlers still run.
+to the frozen inventory. The explicit `--smoke-collection` option substitutes
+both discovery tools, then runs all five collectors against the test subprocess
+and exercises a second finding/report. No real phone is discovered or collected,
+no model is called, and no report is delivered to a customer. Synthetic paths
+replace only the OS file picker; the application's import, approval and export
+handlers still run.
 
 The receipt, restart log and synthetic fixture are retained beside the selected
 output path for replay. A result of `ok: true` applies to this bounded corpus and

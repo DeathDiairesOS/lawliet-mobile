@@ -8,50 +8,48 @@ desktop must preserve the source bytes, expose the expected native-parser record
 and let an examiner trace a saved finding through report review and local export.
 The same expected fields must survive an application restart on each tested host.
 
-This is a bounded existing-evidence workflow. It does not qualify physical phone
-acquisition, every Android schema, recovered/deleted records, external parsers,
-AI reasoning, or every desktop configuration. A synthetic examiner declaration
-tests the software approval gate; it is not independent human examiner sign-off.
+The same native test also discovers a synthetic Android transport and executes
+SMS, contacts, selected shared files, diagnostics/package inventory and accessible
+Trash collection through the actual GUI forms. It automatically parses ten fixed
+source observations, searches the acquired message, creates a source-bound finding,
+approves and exports its report, and reopens it in a different application process.
+Both device-discovery tools are replaced explicitly for this test, so no real
+Android or iPhone is contacted.
+
+This qualifies the host software path, not physical USB, Android permissions,
+complete device extraction, external parser accuracy or AI reasoning. A synthetic
+examiner declaration tests the approval gate, not independent human sign-off.
 The established Swift application is separate from this shared-desktop check.
 
 ## Result, 20 October 2026
 
-The installed shared application at `53dc5bc` passed on **macOS, Windows and
-Linux**, using the same frozen evidence and independently specified expected
-fields. Each returned all eleven expected observations, zero missing/extra/
-duplicate records and zero field mismatches. The withheld-WAL control returned
-the expected ten. Original hashes, the selected finding's exact source citation,
-the complete seven-member report package and persistence through a new native
-process all passed.
+At `59c4f35`, **all three native CI hosts and the aggregate comparison passed** in
+[run 39475712473](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712473).
+Each returned all eleven frozen imported observations and ten acquired observations
+with the expected fields. The missing-WAL control returned ten imported records.
+All originals and collected source hashes verified. Both reports retained their
+exact selected citation and seven-member export package. Findings, approval and
+reports survived a fresh native process, without additional collection commands.
 
-The [machine-readable comparison](desktop-qualification-result.json) retains
-platforms, dependency versions, receipt hashes, exact counts and verification
-results. It compares the actual returned records against the repository oracle,
-not just each runner's success flag.
-
-| Execution | Environment | Result |
+| Native execution | Environment | Result |
 | --- | --- | --- |
-| Local installed native window | macOS 26.7.1 arm64, Python 3.13.14, SQLite 3.54.0, system WebKit | Passed; all 111 installed runtime/assets files matched the tested commit |
-| Hosted installed native window | Windows Server 2025, Python 3.11.9, SQLite 3.45.1, WebView2 | Passed; 115 selected tests, one skip |
-| Hosted installed native window | Ubuntu 24.04 x86_64, Python 3.11.17, SQLite 3.45.1, Qt/Xvfb | Passed; 115 selected tests, four skips |
+| Windows | Windows Server 2025, Python 3.11, WebView2 | Collection, parsing, review, export and restart passed |
+| macOS | macOS 15.7.9 Intel, Python 3.11, Cocoa/WebKit | Same workflow passed |
+| Linux | Ubuntu 24.04 x86_64, Python 3.11, Qt/Xvfb | Same workflow passed |
 
-The same 115 selected backend/controller checks also passed locally on macOS
-with Python 3.14.5 (four platform-specific skips). The native macOS window used
-the separately verified Python 3.13 environment listed above.
+The [machine-readable comparison](desktop-qualification-result.json) retains the
+exact source commit, host/dependency versions, original and acquired field
+fingerprints, restart assertions and receipt hashes. The acquisition fingerprint
+is `c5d8ce901a6e0868e4d67ecac8ac6ea0568d7d3748f1aebb8143afcadc0895e7`.
+Generated collection identifiers and host-observation times are deliberately not
+compared across independent acquisitions; exact recorded source hashes are checked
+within each case and report.
 
-The hosted results are in
-[run 39437995604](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39437995604).
-Hosted macOS and the CI aggregate were still queued without an assigned runner
-at publication. The local macOS result is not a claim that those CI jobs passed.
-The macOS CI baseline is explicitly `macos-15`, matching the separate
-[successful fresh-install check](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39436495017).
-
-A separate manual macOS pass used the real native folder picker, imported the
-corpus, searched the WAL-only message and opened its retained source bytes.
-Read-only checks of that persisted case independently matched all eleven
-observations and all nine file hashes. This supplements the scripted path
-selection described below; Windows and Linux native picker accessibility remain
-outside the automated test.
+A separate local Apple Silicon run at `9a6c16e` also passed the complete native
+workflow and fresh-process restart on macOS 26.7.1/Python 3.13.14. All 115 installed
+runtime/assets files matched that commit. It ran from an installed wheel outside
+the checkout, using an isolated synthetic workspace. Runtime code is unchanged
+between that commit and `59c4f35`; only the CI diagnostic timer changed.
 
 ## Test basis
 
@@ -124,7 +122,8 @@ python -m unittest tests.test_android_qualification tests.test_desktop_bridge \
   tests.test_examination_report tests.test_html_pair_integrity -v
 
 lawliet-desktop --workspace /absolute/path/to/new-synthetic-cases \
-  --smoke-test /absolute/path/to/new-receipts/result.json
+  --smoke-test /absolute/path/to/new-receipts/result.json \
+  --smoke-collection /absolute/path/to/lawliet-mobile/tests/fixtures/collection_adb.py
 ```
 
 On Windows use native absolute paths and the environment's
@@ -134,8 +133,9 @@ checkout when verifying packaging.
 
 The output retains the main result, a fresh-process result and restart log. Its
 sibling fixture directory preserves only the synthetic input, expected-answer
-manifest and local synthetic export, allowing inspection after the run. No test
-acquires a phone, calls an external model or sends a customer report.
+manifest and local synthetic export, allowing inspection after the run. Synthetic
+collection uses a real subprocess with fixed responses, not physical USB. No test
+calls an external model or sends a customer report.
 
 `.github/workflows/desktop.yml` records the commit, OS, Python, SQLite, renderer
 and installed package versions, then compares the native receipts using
@@ -143,7 +143,7 @@ and installed package versions, then compares the native receipts using
 not the case folders. A single green host or a mismatched corpus cannot satisfy
 the aggregate check.
 
-## Windows baseline and remaining scope
+## Backend regressions and remaining scope
 
 The broad Windows job at `5e0dc1e` ran 1,407 tests on Python 3.11 and reported
 36 failures and 151 errors, including subtest entries. Its workflow was advisory,
@@ -153,17 +153,69 @@ The exact classification is retained in
 
 After the selected boundary-test corrections, the Python 3.11 broad Windows run
 at `f60ee2d` executed 1,426 tests: 29 failures, 132 errors and 360 skips. The 26
-selected failure entries are cleared; the remaining 161 entries require separate
-work. This broad suite is not passing. Its
+selected failure entries were cleared; 161 entries remained at that historical
+revision. Its
 [completed Windows job](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39436495158/job/118674758127)
-remains available independently of the scoped native workflow.
+remains available for comparison.
+
+At `59c4f35`, all six required broad backend jobs passed in
+[run 39475712672](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712672).
+Each executed 1,458 tests with zero failures or errors:
+
+| Host | Python 3.11 skips | Python 3.14 skips |
+| --- | ---: | ---: |
+| Windows | 386 | 378 |
+| macOS | 261 | 253 |
+| Linux | 306 | 306 |
+
+The historical classification is not a current failure count. Windows test
+failures now fail CI, just like macOS and Linux; the focused Windows job provides
+faster acquisition/integrity feedback. The full discovery includes all focused
+tests, so the matrix no longer runs those selected suites a second time.
+
+An earlier fast Windows job at `33c5ba6` exposed a test-fixture reader
+thread's code-page decoding exception despite passing assertions. The fixture
+now captures `mklink` diagnostic bytes without decoding them. Periodic
+`faulthandler` stack dumps in long matrix jobs are expected watchdog diagnostics,
+not failed tests.
+
+The final focused Windows job at `9a6c16e` executed 128 tests: 125 passed and three
+POSIX-only tests skipped, with no exception traces. This includes protected
+permissions for new Signal and archive staging folders under a deliberately
+permissive test parent, plus refusal paths preserving existing-folder permissions.
+The [job log](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39474770942/job/118807768623)
+and its SHA-256 are retained in the machine-readable comparison.
+
+A separate full Python 3.11 run at `9a6c16e` exited with a native access violation
+while the periodic watchdog was printing a frame at its exact 180-second deadline.
+That failed attempt is retained. Its pattern is consistent with
+[CPython's asynchronous frame-dump race](https://github.com/python/cpython/issues/116008);
+without a native crash dump, the precise cause remains an inference. CI now omits
+that periodic timer, retaining fatal-crash diagnostics, all tests, verbose progress
+and the 20-minute job timeout.
+The full rerun at `59c4f35` completed on both Windows versions without exception
+tracebacks or native fatal errors. The tested application code is identical to
+`9a6c16e`; the mitigation changes CI diagnostics only.
+
+The fixes preserve UTF-8 source bytes and receipts, pin Windows collection parents,
+stage parser inputs with protected permissions, publish archives without replacing
+foreign destinations, transport Signal secrets outside argv/environment, and wait
+for owned decoder descendants before consuming output. Existing collectors and
+parsers are reused; no new runtime dependency was added.
 
 Review-boundary tests must assert the protection actually provided by each host.
 Windows retained handles deny certain replacement attempts that POSIX permits
 before detecting them. Tests assert those denied attempts, preserved foreign
 files and rollback; they do not relax the production evidence protections.
 
-Collection, optional container and other unsupported Windows paths retain their
-visible broad-suite failures. The required desktop qualification job is separate
-and must pass. Neither a scoped desktop pass nor corrected test fixtures establish
-general Windows backend or device-acquisition support.
+The portable iOS tests execute a synthetic backup subprocess, validate Apple's
+hashed backup layout, parse a known Unicode SMS and verify its source hash. They
+also cover failed/incomplete backups, timeouts and receipt-publication failures.
+They do not qualify physical iPhone USB or the iOS native GUI acquisition path.
+
+Skipped tests include operating-system-specific syscall contracts, absent optional
+dependencies and isolated Mulder endpoints. Linux workers are tested on Linux;
+their host staging/codec contracts run on Windows too. Passing those contracts
+does not qualify a live Windows Docker deployment or an upstream Signal decoder.
+The restricted Mulder collection endpoint remains macOS-only. No physical device,
+paid model provider, complete extraction or universal tool coverage is claimed.

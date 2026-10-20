@@ -10,13 +10,14 @@ data. Optional forensic tools extend collection and parsing.
 
 The established native Swift app and setup script remain macOS-only. A shared
 Windows/macOS/Linux desktop is now available for testing; see
-[desktop installation and capability boundaries](docs/desktop.md). Windows
-backend qualification is still in progress, and Windows CLI CI remains advisory.
-Do not interpret a successful workflow badge as complete Windows qualification.
-The [bounded desktop qualification](docs/desktop-qualification.md) checks frozen
-Android evidence against independent expected fields, through native review,
-synthetic approval/local export and a fresh-process restart. It does not qualify
-physical collection, external parsers or AI reasoning.
+[desktop installation and capability boundaries](docs/desktop.md). All three
+native desktops have passed synthetic Android collection, automatic parsing,
+source inspection, finding review, approved local report export and a fresh-process
+restart. The full backend suites also pass on all three hosts, and Windows CI
+failures now fail the workflow. The
+[qualification record](docs/desktop-qualification.md) identifies the tested commits,
+expected fields and limitations. These checks qualify the host software path;
+physical USB methods, external parsers and AI reasoning need separate validation.
 
 This is an initial working release with a limited native support matrix. Physical
 collection validation is method-specific; successful collection does not establish
