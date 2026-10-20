@@ -51,11 +51,10 @@ jobs:
           import unittest
           sys.path.insert(0, os.getcwd())
           faulthandler.enable()
-          faulthandler.dump_traceback_later(180, repeat=True)
-          try:
-              result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.discover('tests'))
-          finally:
-              faulthandler.cancel_dump_traceback_later()
+          # Keep fatal-crash diagnostics, but avoid asynchronous stack walking:
+          # https://github.com/python/cpython/issues/116008
+          # Verbose test output and the job timeout provide progress and bounds.
+          result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.discover('tests'))
           raise SystemExit(0 if result.wasSuccessful() else 1)
       - name: Exercise the CLI
         run: python -m lawliet_mobile demo --workspace demo-output --json
