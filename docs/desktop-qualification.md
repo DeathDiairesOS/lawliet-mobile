@@ -23,6 +23,19 @@ The established Swift application is separate from this shared-desktop check.
 
 ## Result, 20 October 2026
 
+The subsequent Windows decoder-lifetime fix at `5523c7a` passed all three native
+desktop workflows in
+[run 39530311582](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39530311582),
+all six backend configurations in
+[run 39530311519](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39530311519),
+and the Apple Silicon installation check. Each backend configuration ran 1,468
+tests with zero failures/errors and the platform/dependency skips listed below.
+Windows Python 3.11 and 3.14 each also passed 25 repetitions of the exact
+decoder-descendant regression, without skips. The native comparison again matched
+all eleven imported and ten collected observations, source hashes and reviewed
+report/restart assertions. The machine-readable record retains this follow-up
+separately from the original qualification and the failed attempt.
+
 At `59c4f35`, **all three native CI hosts and the aggregate comparison passed** in
 [run 39475712473](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39475712473).
 Each returned all eleven frozen imported observations and ten acquired observations
@@ -182,6 +195,19 @@ Job Object accounting count. The assertion prevented import in the test. This
 failed run supersedes any claim that the earlier green matrix establishes stable
 cleanup on main. The other five broad jobs, the focused Windows job, the native
 desktop workflow and Apple Silicon installation passed at this revision.
+
+The fix at `5523c7a` associates a private completion port before any process joins
+the owned Job. It reconciles process notifications with the lifetime process count,
+retains exact process handles, and waits for their termination under one deadline.
+Missing, duplicate or ambiguous lifetime coverage refuses output. This follows
+Microsoft's documented asynchronous
+[process termination](https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess)
+and non-guaranteed
+[Job notification delivery](https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_associate_completion_port).
+The original native assertion remains unchanged. Ten deterministic regressions
+cover early accounting, delayed termination, missed/late/duplicate notifications,
+identity uncertainty and startup cleanup. The subsequent native and repeated
+Windows checks passed as recorded above; no runtime dependency was added.
 
 An earlier fast Windows job at `33c5ba6` exposed a test-fixture reader
 thread's code-page decoding exception despite passing assertions. The fixture

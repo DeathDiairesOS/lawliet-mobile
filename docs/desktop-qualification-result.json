@@ -533,5 +533,414 @@
         "status": "not excluded; no DACL ctypes ABI/double-free defect found in read-only review"
       }
     ]
+  },
+  "windows_decoder_lifetime_requalification": {
+    "backend": {
+      "commit": "5523c7a37f5ab4d10af5dfd930670d699c19f823",
+      "run_id": 39530311519,
+      "jobs": [
+        {
+          "job": "macos-311",
+          "test_summaries": [
+            "Ran 1468 tests in 221.668s",
+            "OK (skipped=261)"
+          ],
+          "unexpected_tracebacks": 0,
+          "log_sha256": "e5a668a71609c51ca446e6bbaa65b66cc0420b06c6b584ea029c37c3e29ed3e2"
+        },
+        {
+          "job": "macos-314",
+          "test_summaries": [
+            "Ran 1468 tests in 243.980s",
+            "OK (skipped=253)"
+          ],
+          "unexpected_tracebacks": 0,
+          "log_sha256": "76a4224dc24acc1ce38f52cdc15a9e72f2a08e4be71c2a91eb744fd6956bc96d"
+        },
+        {
+          "job": "ubuntu-311",
+          "test_summaries": [
+            "Ran 1468 tests in 103.959s",
+            "OK (skipped=306)"
+          ],
+          "unexpected_tracebacks": 0,
+          "log_sha256": "af79a7f857d7a2e8eb4ea1719d7b593fafd6bf08c73e0c235cf29c7eeaa0e5f9"
+        },
+        {
+          "job": "ubuntu-314",
+          "test_summaries": [
+            "Ran 1468 tests in 96.229s",
+            "OK (skipped=306)"
+          ],
+          "unexpected_tracebacks": 0,
+          "log_sha256": "1e04e7a971f69f25f334b6269695dfc8c16680f35e20cd7b5f24685ba98ef4c2"
+        },
+        {
+          "job": "windows-311",
+          "test_summaries": [
+            "Ran 1468 tests in 395.619s",
+            "OK (skipped=386)",
+            "Ran 25 tests in 23.092s",
+            "OK"
+          ],
+          "unexpected_tracebacks": 0,
+          "log_sha256": "0a71b17983ef438acd56239c96815c3e03e5d17261ce576e49ab89d81e88a1b4"
+        },
+        {
+          "job": "windows-314",
+          "test_summaries": [
+            "Ran 1468 tests in 444.557s",
+            "OK (skipped=378)",
+            "Ran 25 tests in 39.612s",
+            "OK"
+          ],
+          "unexpected_tracebacks": 0,
+          "log_sha256": "055b5ad0b04b702f906e1a1811c9183206b1a9a61536438a38a03e3103d38a15"
+        },
+        {
+          "job": "windows-focused",
+          "test_summaries": [
+            "Ran 24 tests in 26.681s",
+            "OK",
+            "Ran 53 tests in 18.034s",
+            "OK (skipped=1)",
+            "Ran 61 tests in 17.510s",
+            "OK (skipped=2)"
+          ],
+          "unexpected_tracebacks": 0,
+          "log_sha256": "fabcd17c27962568ace7f525bafeb40d88f9d59bb6ee511caf9def7a35b02f49"
+        }
+      ],
+      "previous_failure": {
+        "commit": "80fe3c6936750fd88562800ef5a504645919c3b3",
+        "run_id": 39477556480,
+        "job_id": 118817336440,
+        "test": "test_windows_decoder_descendants_are_stopped_before_output_inspection",
+        "log_sha256": "3510f71074f784ce4c84b3f77c0ec32ca70951103463d21c8cbe2567d989cf66"
+      }
+    },
+    "backend_receipt_sha256": "bbdfbeb39221af44c8c29d31e7733bc25dacbe00db75a24a1449cc947da6e748",
+    "native_run_id": 39530311582,
+    "native_comparison_sha256": "4ef3cf4908a33ee50e800312635eebd68219dbca845dcc51fadf324a8bd35592",
+    "native_comparison": {
+      "schema_version": 1,
+      "ok": true,
+      "commit": "5523c7a37f5ab4d10af5dfd930670d699c19f823",
+      "scope": "Synthetic Android subprocess acquisition, import, native parsing, desktop review and local report export",
+      "excludes": [
+        "physical acquisition",
+        "external parsers",
+        "AI reasoning",
+        "independent human examiner sign-off"
+      ],
+      "hosts": {
+        "macos-15-intel": {
+          "environment": {
+            "commit": "5523c7a37f5ab4d10af5dfd930670d699c19f823",
+            "runner_os": "macOS",
+            "platform": "macOS-15.7.9-x86_64-i386-64bit",
+            "python": "3.11.9 (v3.11.9:de54cf5be3, Apr  2 2024, 07:12:50) [Clang 13.0.0 (clang-1300.0.29.30)]",
+            "renderer": "cocoa",
+            "evidence": "frozen synthetic Android corpus only",
+            "sqlite_version": "3.45.1",
+            "package_versions": {
+              "lawliet-mobile": "0.1.0",
+              "pywebview": "6.2.1"
+            }
+          },
+          "corpus_sha256": "6ac86a307f18af7f3a5443599ac3df519a6e046a0d27d5e80df139cfa8b6aefb",
+          "oracle_sha256": "90bed257960deebd255b99c3b36c3c1f9bd8e7e1ed2e52c5d8bb1653f04ce3a8",
+          "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+          "expected_field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+          "comparison": {
+            "expected_records": 11,
+            "actual_records": 11,
+            "matched_records": 11,
+            "missing_records": 0,
+            "unexpected_records": 0,
+            "duplicate_records": 0,
+            "field_mismatches": 0
+          },
+          "restart": {
+            "ok": true,
+            "initial_pid": 4347,
+            "reopened_pid": 5877,
+            "new_process": true,
+            "case_id": "DESKTOP-SMOKE",
+            "report_id": "d78b04b6e717445387902c625b6d3e2f",
+            "approval_persisted": true,
+            "export_verified": true,
+            "collection_verified": true,
+            "steps": [
+              {
+                "step": "search_source_inspector_ui",
+                "matched_rows": 1,
+                "literal_text_preserved": true,
+                "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
+                "timestamp": "2024-01-01T00:01:00.456000Z",
+                "timestamp_raw": "1704067260456"
+              },
+              {
+                "step": "report_reopened_ui",
+                "id": "d78b04b6e717445387902c625b6d3e2f",
+                "approval_persisted": true
+              },
+              {
+                "step": "collection_report_ui",
+                "phase": "reopen",
+                "records": 10,
+                "source_sha256": "46d1b803aa247faa3139d8c3e89ea1dcbfe094d45f8e562023c4fa2507411c50",
+                "report_id": "4c76797a68184500bfbdd59d3f96f3c0"
+              },
+              {
+                "step": "integrity",
+                "result": {
+                  "ok": true,
+                  "files_checked": 9,
+                  "findings_checked": 1,
+                  "investigation_ledger": {
+                    "investigations_checked": 1,
+                    "events_checked": 1,
+                    "legacy_partial_receipts": 0,
+                    "audit_head": "a91517567e15726ca0dadef6bf6efebd94cbaa5af0583c5a0370b7988b11dd2c"
+                  },
+                  "engine_outputs_checked": 0,
+                  "audit_head": "a91517567e15726ca0dadef6bf6efebd94cbaa5af0583c5a0370b7988b11dd2c",
+                  "failures": []
+                }
+              }
+            ]
+          },
+          "originals_unchanged": true,
+          "collection": {
+            "ok": true,
+            "case_id": "DESKTOP-COLLECTION",
+            "profiles": [
+              "sms-provider",
+              "contacts-provider",
+              "files",
+              "triage",
+              "trash-photos"
+            ],
+            "records_checked": 10,
+            "field_fingerprint_sha256": "c5d8ce901a6e0868e4d67ecac8ac6ea0568d7d3748f1aebb8143afcadc0895e7",
+            "source_hashes_verified": true,
+            "report_verified": true,
+            "transport_sha256": "bc5406299aa959fd51ca37819f06207e353963b0a04dd72e3e509555891d83ca",
+            "transport_calls_sha256": "fc98e69de34c17b26021932f44877e7e1a8e08c7fe1c8f679dbff71866e5a4b7",
+            "transport": "synthetic subprocess; no physical USB",
+            "report": {
+              "id": "4c76797a68184500bfbdd59d3f96f3c0",
+              "manifest_sha256": "3ff497fb1fe63dc39bf7246888dca5a98ece5f556e9c01c4621d8b2f5ef94656"
+            }
+          }
+        },
+        "ubuntu-24.04": {
+          "environment": {
+            "commit": "5523c7a37f5ab4d10af5dfd930670d699c19f823",
+            "runner_os": "Linux",
+            "platform": "Linux-6.17.0-1022-azure-x86_64-with-glibc2.39",
+            "python": "3.11.17 (main, Oct  1 2026, 14:32:31) [GCC 13.3.0]",
+            "renderer": "qt",
+            "evidence": "frozen synthetic Android corpus only",
+            "sqlite_version": "3.45.1",
+            "package_versions": {
+              "lawliet-mobile": "0.1.0",
+              "pywebview": "6.2.1"
+            }
+          },
+          "corpus_sha256": "6ac86a307f18af7f3a5443599ac3df519a6e046a0d27d5e80df139cfa8b6aefb",
+          "oracle_sha256": "90bed257960deebd255b99c3b36c3c1f9bd8e7e1ed2e52c5d8bb1653f04ce3a8",
+          "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+          "expected_field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+          "comparison": {
+            "expected_records": 11,
+            "actual_records": 11,
+            "matched_records": 11,
+            "missing_records": 0,
+            "unexpected_records": 0,
+            "duplicate_records": 0,
+            "field_mismatches": 0
+          },
+          "restart": {
+            "ok": true,
+            "initial_pid": 2980,
+            "reopened_pid": 3689,
+            "new_process": true,
+            "case_id": "DESKTOP-SMOKE",
+            "report_id": "90cf097f9a0c49a49fe9dcb8a91f2b86",
+            "approval_persisted": true,
+            "export_verified": true,
+            "collection_verified": true,
+            "steps": [
+              {
+                "step": "search_source_inspector_ui",
+                "matched_rows": 1,
+                "literal_text_preserved": true,
+                "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
+                "timestamp": "2024-01-01T00:01:00.456000Z",
+                "timestamp_raw": "1704067260456"
+              },
+              {
+                "step": "report_reopened_ui",
+                "id": "90cf097f9a0c49a49fe9dcb8a91f2b86",
+                "approval_persisted": true
+              },
+              {
+                "step": "collection_report_ui",
+                "phase": "reopen",
+                "records": 10,
+                "source_sha256": "ab534921152c44f7afb560cd36e83a11faa2631a25d4f53066ac1d13b9d5786e",
+                "report_id": "52dfe8259f4f4075ad91c38811b20d1f"
+              },
+              {
+                "step": "integrity",
+                "result": {
+                  "ok": true,
+                  "files_checked": 9,
+                  "findings_checked": 1,
+                  "investigation_ledger": {
+                    "investigations_checked": 1,
+                    "events_checked": 1,
+                    "legacy_partial_receipts": 0,
+                    "audit_head": "687d3ef24317883df3ab1e2a376652f2401c4adb49c72d886d3fa0b0f50585e4"
+                  },
+                  "engine_outputs_checked": 0,
+                  "audit_head": "687d3ef24317883df3ab1e2a376652f2401c4adb49c72d886d3fa0b0f50585e4",
+                  "failures": []
+                }
+              }
+            ]
+          },
+          "originals_unchanged": true,
+          "collection": {
+            "ok": true,
+            "case_id": "DESKTOP-COLLECTION",
+            "profiles": [
+              "sms-provider",
+              "contacts-provider",
+              "files",
+              "triage",
+              "trash-photos"
+            ],
+            "records_checked": 10,
+            "field_fingerprint_sha256": "c5d8ce901a6e0868e4d67ecac8ac6ea0568d7d3748f1aebb8143afcadc0895e7",
+            "source_hashes_verified": true,
+            "report_verified": true,
+            "transport_sha256": "bc5406299aa959fd51ca37819f06207e353963b0a04dd72e3e509555891d83ca",
+            "transport_calls_sha256": "8fbda4cdce6083450359ff1c1ea339c8a7d37b4c58b2b5d31df4b8ccb96eef30",
+            "transport": "synthetic subprocess; no physical USB",
+            "report": {
+              "id": "52dfe8259f4f4075ad91c38811b20d1f",
+              "manifest_sha256": "20d805cea0db1089ec3dd5012cb7e329b49271f22f224b88f267a97d5ca2da81"
+            }
+          }
+        },
+        "windows-latest": {
+          "environment": {
+            "commit": "5523c7a37f5ab4d10af5dfd930670d699c19f823",
+            "runner_os": "Windows",
+            "platform": "Windows-10-10.0.26100-SP0",
+            "python": "3.11.9 (tags/v3.11.9:de54cf5, Apr  2 2024, 10:12:12) [MSC v.1938 64 bit (AMD64)]",
+            "renderer": "edgechromium",
+            "evidence": "frozen synthetic Android corpus only",
+            "sqlite_version": "3.45.1",
+            "package_versions": {
+              "lawliet-mobile": "0.1.0",
+              "pywebview": "6.2.1"
+            }
+          },
+          "corpus_sha256": "6ac86a307f18af7f3a5443599ac3df519a6e046a0d27d5e80df139cfa8b6aefb",
+          "oracle_sha256": "90bed257960deebd255b99c3b36c3c1f9bd8e7e1ed2e52c5d8bb1653f04ce3a8",
+          "field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+          "expected_field_fingerprint_sha256": "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76",
+          "comparison": {
+            "expected_records": 11,
+            "actual_records": 11,
+            "matched_records": 11,
+            "missing_records": 0,
+            "unexpected_records": 0,
+            "duplicate_records": 0,
+            "field_mismatches": 0
+          },
+          "restart": {
+            "ok": true,
+            "initial_pid": 848,
+            "reopened_pid": 3196,
+            "new_process": true,
+            "case_id": "DESKTOP-SMOKE",
+            "report_id": "2001adf1ea194cc3a60c3c35dc7741ec",
+            "approval_persisted": true,
+            "export_verified": true,
+            "collection_verified": true,
+            "steps": [
+              {
+                "step": "search_source_inspector_ui",
+                "matched_rows": 1,
+                "literal_text_preserved": true,
+                "source_sha256": "c3d5a637b9dcb346e50dc69cb206031c390a31c0221d6e2f1e68d5a9dc76d0af",
+                "timestamp": "2024-01-01T00:01:00.456000Z",
+                "timestamp_raw": "1704067260456"
+              },
+              {
+                "step": "report_reopened_ui",
+                "id": "2001adf1ea194cc3a60c3c35dc7741ec",
+                "approval_persisted": true
+              },
+              {
+                "step": "collection_report_ui",
+                "phase": "reopen",
+                "records": 10,
+                "source_sha256": "9ea4949f3b6ec863473ae8caa94f07052e4d53bbd1ca3c0be989676b39a6e239",
+                "report_id": "45f62abfbdc44e8a85b1bc4eef964d14"
+              },
+              {
+                "step": "integrity",
+                "result": {
+                  "ok": true,
+                  "files_checked": 9,
+                  "findings_checked": 1,
+                  "investigation_ledger": {
+                    "investigations_checked": 1,
+                    "events_checked": 1,
+                    "legacy_partial_receipts": 0,
+                    "audit_head": "381748f90cdac055d7ab3e250bf0aa8015be5d969391c4e65a62aa6d638b44e2"
+                  },
+                  "engine_outputs_checked": 0,
+                  "audit_head": "381748f90cdac055d7ab3e250bf0aa8015be5d969391c4e65a62aa6d638b44e2",
+                  "failures": []
+                }
+              }
+            ]
+          },
+          "originals_unchanged": true,
+          "collection": {
+            "ok": true,
+            "case_id": "DESKTOP-COLLECTION",
+            "profiles": [
+              "sms-provider",
+              "contacts-provider",
+              "files",
+              "triage",
+              "trash-photos"
+            ],
+            "records_checked": 10,
+            "field_fingerprint_sha256": "c5d8ce901a6e0868e4d67ecac8ac6ea0568d7d3748f1aebb8143afcadc0895e7",
+            "source_hashes_verified": true,
+            "report_verified": true,
+            "transport_sha256": "c8f8e73454631d4197fc2694cf824c7b2f1ffecf26a4ed2380cce2dd1568fea3",
+            "transport_calls_sha256": "0e95e01f96979e33a6857076392b80137152f6fe1fd3caef948a916c697ec4ed",
+            "transport": "synthetic subprocess; no physical USB",
+            "report": {
+              "id": "45f62abfbdc44e8a85b1bc4eef964d14",
+              "manifest_sha256": "ea117c4c21a7120d0402e56340e296cb256a2d97605712d8060a61e663c20089"
+            }
+          }
+        }
+      },
+      "errors": []
+    },
+    "apple_silicon_installation_run_id": 39530311517,
+    "qualification_limits_unchanged": true
   }
 }
