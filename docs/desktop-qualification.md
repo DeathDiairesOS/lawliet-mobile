@@ -173,11 +173,21 @@ failures now fail CI, just like macOS and Linux; the focused Windows job provide
 faster acquisition/integrity feedback. The full discovery includes all focused
 tests, so the matrix no longer runs those selected suites a second time.
 
+A subsequent main run at `80fe3c6` exposed an intermittent Windows/Python 3.14
+decoder-cleanup failure in
+[run 39477556480](https://github.com/DeathDiairesOS/lawliet-mobile/actions/runs/39477556480).
+The test retained a handle to the exact synthetic Signal decoder descendant;
+that handle was still unsignaled when output inspection began, despite an empty
+Job Object accounting count. The assertion prevented import in the test. This
+failed run supersedes any claim that the earlier green matrix establishes stable
+cleanup on main. The other five broad jobs, the focused Windows job, the native
+desktop workflow and Apple Silicon installation passed at this revision.
+
 An earlier fast Windows job at `33c5ba6` exposed a test-fixture reader
 thread's code-page decoding exception despite passing assertions. The fixture
-now captures `mklink` diagnostic bytes without decoding them. Periodic
-`faulthandler` stack dumps in long matrix jobs are expected watchdog diagnostics,
-not failed tests.
+now captures `mklink` diagnostic bytes without decoding them. Earlier periodic
+`faulthandler` stack dumps were watchdog diagnostics; that timer was subsequently
+removed after the native crash described below.
 
 The final focused Windows job at `9a6c16e` executed 128 tests: 125 passed and three
 POSIX-only tests skipped, with no exception traces. This includes protected

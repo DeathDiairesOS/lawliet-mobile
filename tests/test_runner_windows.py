@@ -15,7 +15,149 @@ from lawliet_mobile import runner_lease
 from lawliet_mobile.core import UserError, connect, create_case
 
 
+class JobApiFixture:
+    """Deterministic Windows API outcomes, including accounting-before-exit."""
+    def __init__(self, packets=(101,), total=None):
+        self.packets = list(packets)
+        self.total = len(packets) if total is None else total
+        self.now, self.error = 0., 0
+        self.terminated, self.member, self.timeout = False, True, False
+        self.open_error = None
+        self.late = []
+        self.closed, self.waits = [], []
+        self.key = 10
+
+    def GetQueuedCompletionStatus(self, port, message, key, pid, milliseconds):
+        if not self.packets:
+            self.error = 258
+            self.now += milliseconds / 1000
+            return False
+        message._obj.value, key._obj.value, pid._obj.value = 6, self.key, self.packets.pop(0)
+        return True
+
+    def OpenProcess(self, rights, inherit, pid):
+        if self.open_error:
+            self.error = self.open_error
+            return None
+        return pid + 1000
+
+    def WaitForSingleObject(self, handle, milliseconds):
+        self.waits.append((handle, milliseconds))
+        if not milliseconds:
+            return 258
+        self.now += milliseconds / 1000 if self.timeout else .001
+        return 258 if self.timeout else 0
+
+    def IsProcessInJob(self, handle, job, member):
+        member._obj.value = self.member
+        return True
+
+    def TerminateJobObject(self, job, code):
+        self.terminated = True
+        self.packets.extend(self.late)
+        self.late = []
+        return True
+
+    def QueryInformationJobObject(self, job, kind, counts, size, returned):
+        counts._obj.total, counts._obj.active = self.total, 0
+        return True
+
+    def CloseHandle(self, handle):
+        self.closed.append(handle)
+        return True
+
+
 class JobCompletionTests(unittest.TestCase):
+    def run_barrier(self, api):
+        from lawliet_mobile import runner_windows
+        with patch.object(runner_windows.time, 'monotonic', side_effect=lambda: api.now), \
+                patch.object(ctypes, 'get_last_error', side_effect=lambda: api.error, create=True):
+            runner_windows._terminate_and_wait(api, 10, 20, timeout=.25)
+
+    def test_zero_active_count_still_waits_exact_unsignaled_handle(self):
+        api = JobApiFixture()
+        self.run_barrier(api)
+        self.assertTrue(api.terminated)
+        self.assertEqual(api.closed, [1101])
+        self.assertEqual(api.waits[0], (1101, 0))
+        self.assertGreater(api.waits[1][1], 0)
+
+    def test_zero_active_count_cannot_promote_unsignaled_output(self):
+        api = JobApiFixture()
+        api.timeout = True
+        with self.assertRaisesRegex(TimeoutError, 'finish terminating'):
+            self.run_barrier(api)
+        self.assertEqual(api.closed, [1101])
+        self.assertLessEqual(api.now, .251)
+
+    def test_missing_lifetime_packet_refuses_with_one_bounded_deadline(self):
+        api = JobApiFixture(total=2)
+        with self.assertRaisesRegex(TimeoutError, 'lifetime coverage'):
+            self.run_barrier(api)
+        self.assertEqual(api.closed, [1101])
+        self.assertLessEqual(api.now, .251)
+
+    def test_late_descendant_notification_is_retained_and_waited(self):
+        api = JobApiFixture(total=2)
+        api.late = [102]
+        self.run_barrier(api)
+        self.assertEqual(api.closed, [1101, 1102])
+        self.assertEqual({handle for handle, wait in api.waits if wait}, {1101, 1102})
+
+    def test_duplicate_cannot_substitute_for_missing_lifetime(self):
+        api = JobApiFixture((101, 101), total=2)
+        with self.assertRaisesRegex(RuntimeError, 'repeats an identity'):
+            self.run_barrier(api)
+        self.assertTrue(api.terminated)
+        self.assertEqual(api.closed, [1101])
+
+    def test_unknown_notification_job_refuses_and_terminates_owned_job(self):
+        api = JobApiFixture()
+        api.key = 99
+        with self.assertRaisesRegex(RuntimeError, 'notification identity'):
+            self.run_barrier(api)
+        self.assertTrue(api.terminated)
+        self.assertEqual(api.waits, [])
+
+    def test_unrelated_recycled_pid_is_not_waited_or_accepted(self):
+        api = JobApiFixture()
+        api.member = False
+        with self.assertRaisesRegex(RuntimeError, 'no longer matches'):
+            self.run_barrier(api)
+        self.assertTrue(api.terminated)
+        self.assertEqual(api.waits, [(1101, 0)])
+        self.assertEqual(api.closed, [1101])
+
+    def test_access_denied_is_not_treated_as_destroyed_process(self):
+        for error, raises in ((5, True), (87, False)):
+            with self.subTest(error=error):
+                api = JobApiFixture()
+                api.open_error = error
+                if raises:
+                    with self.assertRaisesRegex(OSError, 'retain owned'):
+                        self.run_barrier(api)
+                else:
+                    self.run_barrier(api)
+                self.assertTrue(api.terminated)
+                self.assertEqual(api.closed, [])
+
+    def test_excess_packets_refuse_even_after_processes_are_inactive(self):
+        api = JobApiFixture((101, 102), total=1)
+        with self.assertRaisesRegex(RuntimeError, 'excess notifications'):
+            self.run_barrier(api)
+        self.assertEqual(api.closed, [1101, 1102])
+
+    def test_completion_port_failure_closes_job_exactly_once(self):
+        from types import SimpleNamespace
+        from lawliet_mobile import runner_windows
+        api = JobApiFixture()
+        with patch.dict(sys.modules, {'msvcrt': SimpleNamespace()}), \
+                patch.object(runner_windows, '_job', return_value=(api, 10)), \
+                patch.object(runner_windows, '_completion_port', side_effect=OSError('port refused')):
+            with self.assertRaisesRegex(OSError, 'port refused'):
+                runner_windows.spawn(['unused'], cwd=None, stdout=None, stderr=None)
+        self.assertEqual(api.closed, [10])
+
     def test_completion_error_and_timeout_cannot_promote_output(self):
         from types import SimpleNamespace
         from unittest.mock import Mock
@@ -119,8 +261,13 @@ class WindowsRunnerTests(unittest.TestCase):
     def test_assignment_failure_never_executes_tool(self):
         from lawliet_mobile import runner_windows
         api, job = runner_windows._job()
+        assignments = []
         class RefuseAssignment:
+            def __getattr__(self, name):
+                return getattr(api, name)
             def AssignProcessToJobObject(self, *args):
+                assignments.append(args)
+                ctypes.set_last_error(5)
                 return False
             def CloseHandle(self, handle):
                 return api.CloseHandle(handle)
@@ -128,6 +275,7 @@ class WindowsRunnerTests(unittest.TestCase):
             with self.assertRaises(OSError):
                 runner_lease.spawn([sys.executable, '-c', worker_code(self.ready)],
                     cwd=self.base, stdout=log, stderr=log)
+        self.assertEqual(len(assignments), 1)
         self.assertFalse(self.ready.exists())
 
     def test_normal_return_and_job_release(self):

@@ -28,6 +28,11 @@ def _api():
         'AssignProcessToJobObject': ([wintypes.HANDLE, wintypes.HANDLE], wintypes.BOOL),
         'QueryInformationJobObject': ([wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD, wintypes.LPVOID], wintypes.BOOL),
         'TerminateJobObject': ([wintypes.HANDLE, wintypes.UINT], wintypes.BOOL),
+        'CreateIoCompletionPort': ([wintypes.HANDLE, wintypes.HANDLE, ctypes.c_size_t, wintypes.DWORD], wintypes.HANDLE),
+        'GetQueuedCompletionStatus': ([wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD), ctypes.POINTER(ctypes.c_size_t), ctypes.POINTER(wintypes.LPVOID), wintypes.DWORD], wintypes.BOOL),
+        'OpenProcess': ([wintypes.DWORD, wintypes.BOOL, wintypes.DWORD], wintypes.HANDLE),
+        'IsProcessInJob': ([wintypes.HANDLE, wintypes.HANDLE, ctypes.POINTER(wintypes.BOOL)], wintypes.BOOL),
+        'WaitForSingleObject': ([wintypes.HANDLE, wintypes.DWORD], wintypes.DWORD),
         'CloseHandle': ([wintypes.HANDLE], wintypes.BOOL),
     }
     for name, (args, result) in signatures.items():
@@ -121,38 +126,142 @@ def _startup(handles):
     return startup
 
 
-def _close_job_when_released(api, job, descriptor, completed, errors):
+def _completion_port(api, job):
+    """Associate before assigning any process, so lifetime coverage is checkable."""
+    class Association(ctypes.Structure):
+        _fields_ = [('key', wintypes.LPVOID), ('port', wintypes.HANDLE)]
+    port = api.CreateIoCompletionPort(wintypes.HANDLE(-1), None, 0, 1)
+    if not port:
+        raise ctypes.WinError(ctypes.get_last_error())
+    association = Association(job, port)
+    if not api.SetInformationJobObject(job, 7, ctypes.byref(association), ctypes.sizeof(association)):
+        error = ctypes.get_last_error()
+        api.CloseHandle(port)
+        raise ctypes.WinError(error)
+    return port
+
+
+def _accounting(api, job):
+    class Accounting(ctypes.Structure):
+        _fields_ = [(name, ctypes.c_longlong) for name in (
+            'user', 'kernel', 'period_user', 'period_kernel')] + [(name, wintypes.DWORD)
+            for name in ('page_faults', 'total', 'active', 'terminated')]
+    counts = Accounting()
+    if not api.QueryInformationJobObject(job, 1, ctypes.byref(counts), ctypes.sizeof(counts), None):
+        raise OSError(ctypes.get_last_error(), 'Cannot inspect owned Windows process accounting')
+    return counts
+
+
+def _terminate_and_wait(api, job, port, *, timeout=5):
+    """Wait exact process objects, not merely the early ActiveProcesses counter.
+
+    NEW_PROCESS notifications are not guaranteed. Their count must match the
+    job's cumulative TotalProcesses; missing/excess coverage refuses outputs.
+    https://learn.microsoft.com/en-us/windows/win32/api/winnt/ns-winnt-jobobject_associate_completion_port
+    https://learn.microsoft.com/en-us/windows/win32/api/processthreadsapi/nf-processthreadsapi-terminateprocess
+    """
+    deadline = time.monotonic() + timeout
+    handles, seen, terminated = [], 0, False
+    process_ids = set()
+
+    def collect(wait_ms):
+        nonlocal seen
+        message, key, pid = wintypes.DWORD(), ctypes.c_size_t(), wintypes.LPVOID()
+        if not api.GetQueuedCompletionStatus(port, ctypes.byref(message), ctypes.byref(key), ctypes.byref(pid), wait_ms):
+            error = ctypes.get_last_error()
+            if error == 258:  # WAIT_TIMEOUT, not an omitted successful packet.
+                return False
+            raise OSError(error, 'Cannot inspect owned Windows process notifications')
+        if key.value != job:
+            raise RuntimeError('Unexpected Windows job notification identity')
+        if message.value != 6:  # JOB_OBJECT_MSG_NEW_PROCESS; exit packets are not a wait barrier.
+            return True
+        seen += 1
+        if seen > 4096 or not pid.value or pid.value > 0xffffffff:
+            raise RuntimeError('Owned Windows process lifetime ledger exceeds its bound')
+        if pid.value in process_ids:
+            # Refuse ambiguous reuse as well as duplicate packets: either could
+            # otherwise conceal a different lifetime whose packet was omitted.
+            raise RuntimeError('Owned Windows process lifetime ledger repeats an identity')
+        process_ids.add(pid.value)
+        handle = api.OpenProcess(0x00101000, False, pid.value)  # SYNCHRONIZE | QUERY_LIMITED_INFORMATION
+        if not handle:
+            error = ctypes.get_last_error()
+            if error == 87:  # PID no longer identifies an extant process object.
+                return True
+            raise OSError(error, 'Cannot retain owned Windows process identity')
+        try:
+            state = api.WaitForSingleObject(handle, 0)
+            if state == 0:
+                return True  # This exact object has already terminated.
+            if state != 258:
+                raise OSError(ctypes.get_last_error(), 'Cannot inspect owned Windows process state')
+            member = wintypes.BOOL()
+            if not api.IsProcessInJob(handle, job, ctypes.byref(member)):
+                raise OSError(ctypes.get_last_error(), 'Cannot verify owned Windows process membership')
+            if not member.value:
+                # Could be a recycled PID. Never wait for or signal an unrelated
+                # live process, nor treat unknown identity as completed work.
+                raise RuntimeError('Windows process identity no longer matches its owned job')
+            handles.append(handle)
+            handle = None
+        finally:
+            if handle is not None:
+                api.CloseHandle(handle)
+        return True
+
+    try:
+        # Retain available live identities before requesting asynchronous exit.
+        while collect(0):
+            if time.monotonic() >= deadline:
+                raise TimeoutError('Owned Windows process ledger did not stabilize within its bound')
+        if not api.TerminateJobObject(job, 125):
+            raise OSError(ctypes.get_last_error(), 'Cannot terminate owned Windows process tree')
+        terminated = True
+        while True:
+            counts = _accounting(api, job)
+            if seen > counts.total:
+                raise RuntimeError('Owned Windows process lifetime ledger has excess notifications')
+            if counts.active == 0 and seen == counts.total:
+                for handle in handles:
+                    remaining = max(0, int((deadline - time.monotonic()) * 1000))
+                    state = api.WaitForSingleObject(handle, remaining)
+                    if state == 258:
+                        raise TimeoutError('Owned Windows process did not finish terminating within its bound')
+                    if state != 0:
+                        raise OSError(ctypes.get_last_error(), 'Cannot wait for owned Windows process termination')
+                final = _accounting(api, job)
+                if final.active == 0 and seen == final.total:
+                    return
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError('Owned Windows process lifetime coverage could not be confirmed')
+            collect(min(50, max(1, int(remaining * 1000))))
+    finally:
+        if not terminated:
+            api.TerminateJobObject(job, 125)
+        for handle in handles:
+            api.CloseHandle(handle)
+
+
+def _close_job_when_released(api, job, port, descriptor, completed, errors):
     try:
         while os.read(descriptor, 1):
             pass
     finally:
         os.close(descriptor)
         try:
-            if not api.TerminateJobObject(job, 125):
-                raise ctypes.WinError(ctypes.get_last_error())
-            class Accounting(ctypes.Structure):
-                _fields_ = [(name, ctypes.c_longlong) for name in (
-                    'user', 'kernel', 'period_user', 'period_kernel')] + [(name, wintypes.DWORD)
-                    for name in ('page_faults', 'total', 'active', 'terminated')]
-            deadline = time.monotonic() + 5
-            while True:
-                counts = Accounting()
-                if not api.QueryInformationJobObject(job, 1, ctypes.byref(counts), ctypes.sizeof(counts), None):
-                    raise ctypes.WinError(ctypes.get_last_error())
-                if counts.active == 0:
-                    break
-                if time.monotonic() >= deadline:
-                    raise TimeoutError('Owned Windows process tree did not terminate within its bound')
-                time.sleep(.01)
+            _terminate_and_wait(api, job, port)
         except BaseException as exc:
             errors.append(type(exc).__name__)
         finally:
             api.CloseHandle(job)
+            api.CloseHandle(port)
             completed.set()
 
 
 def wait_stopped(child):
-    """Do not promote child output until the entire owned Job is inactive."""
+    """Do not promote output until every owned process lifetime has completed."""
     state = getattr(child, '_lawliet_job_completion', None)
     if state is not None:
         completed, errors = state
@@ -166,9 +275,10 @@ def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None, env=None, 
     # live descriptor inheritable across unrelated concurrent process launches.
     inherited = []
     config_read = config_write = alive_read = alive_write = None
-    child = None
+    child = port = None
     api, job = _job()
     try:
+        port = _completion_port(api, job)
         config_read, config_write = os.pipe()
         handles = {}
         for name, fd in (('configuration', config_read), ('lease', lease_fd), ('stdin', stdin_fd)):
@@ -199,9 +309,9 @@ def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None, env=None, 
         completed, errors = threading.Event(), []
         child._lawliet_job_completion = (completed, errors)
         watcher = threading.Thread(target=_close_job_when_released,
-            args=(api, job, alive_read, completed, errors), daemon=True, name='lawliet-owned-job')
+            args=(api, job, port, alive_read, completed, errors), daemon=True, name='lawliet-owned-job')
         watcher.start()
-        job = None
+        job = port = None
         alive_read = None
         for fd in inherited:
             os.close(fd)
@@ -227,6 +337,9 @@ def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None, env=None, 
         if job is not None:
             api.CloseHandle(job)
             job = None
+        if port is not None:
+            api.CloseHandle(port)
+            port = None
         if child is not None:
             if child.poll() is None:
                 child.kill()
@@ -238,6 +351,8 @@ def spawn(argv, *, cwd, stdout, stderr, lease_fd=None, stdin_fd=None, env=None, 
                 os.close(fd)
         if job is not None:
             api.CloseHandle(job)
+        if port is not None:
+            api.CloseHandle(port)
 
 
 def guardian(configuration_handle):

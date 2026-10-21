@@ -60,3 +60,20 @@ jobs:
         run: python -m lawliet_mobile demo --workspace demo-output --json
       - name: Verify demo evidence
         run: python -m lawliet_mobile verify --case demo --workspace demo-output --json
+      - name: Repeat Windows decoder completion boundary
+        if: runner.os == 'Windows' && !cancelled()
+        shell: python
+        run: |
+          import os
+          import sys
+          import unittest
+          sys.path.insert(0, os.getcwd())
+          from tests.test_signal_customer_intake import SignalCustomerIntakeTests
+          # Exercise the previously intermittent boundary with real descendants.
+          # Each repetition creates its own case, decoder and retained HANDLE.
+          suite = unittest.TestSuite(
+              SignalCustomerIntakeTests('test_windows_decoder_descendants_are_stopped_before_output_inspection')
+              for _ in range(25)
+          )
+          result = unittest.TextTestRunner(verbosity=2, failfast=True).run(suite)
+          raise SystemExit(0 if result.wasSuccessful() else 1)
