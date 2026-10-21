@@ -15,7 +15,7 @@ from .leapp_reports import report_review_note
 from .report import safe_output
 from .core import import_evidence
 from .parsers import native_analyze, timestamp
-from .tools import devices, doctor, collect
+from .tools import devices, doctor, collect, IOS_PROFILE_LIMITS
 from .acquisition import collect_android
 from .messages import import_chat
 from .discord_package import import_discord_package
@@ -23,7 +23,7 @@ from .media import preview
 from .signal_backup import decrypt_signal, signal_backup_preflight
 from .android_backup import import_backup
 from .private_apps import collect_private_apps
-from .validation import preflight, validate_case
+from .validation import preflight, validate_case, ios_collection_profile
 from .phone_assessment import assess_android
 from .pipeline import process_evidence
 from . import case_management
@@ -413,6 +413,8 @@ def handle(workspace, request):
         if action == 'preflight':
             budget=int(request.get('max_gib',20))*1024**3
             if request['platform']=='android' and request.get('profile') in {'contacts-provider','sms-provider'}:budget=min(budget,64*1024**2)
+            if request['platform']=='ios':
+                return preflight(workspace,'ios',budget,ios_collection_profile(request.get('profile')))
             return preflight(workspace,request['platform'],budget)
         if action == 'app-coverage':
             return app_coverage(db,request['evidence'],request.get('run'))
@@ -423,7 +425,10 @@ def handle(workspace, request):
         if action == 'collect':
             platform=request['platform'];budget=int(request.get('max_gib',20))*1024**3
             if platform=='android' and request.get('profile') in {'contacts-provider','sms-provider'}:budget=min(budget,64*1024**2)
-            readiness=preflight(workspace,platform,budget)
+            ios_profile=ios_collection_profile(request.get('profile')) if platform=='ios' else None
+            budget=min(budget,IOS_PROFILE_LIMITS.get(ios_profile,budget))
+            readiness=(preflight(workspace,platform,budget,ios_profile) if platform=='ios'
+                       else preflight(workspace,platform,budget))
             if not readiness['ready']: raise UserError('Acquisition preflight failed: reserve twice the collection budget plus 1 GiB, and configure required tools. Choose another workspace or adjust the budget deliberately.')
             if platform=='android' and request.get('profile')=='private-apps':
                 result=collect_private_apps(root,db,workspace,request['serial'],3600,budget)
@@ -432,7 +437,9 @@ def handle(workspace, request):
                 timeout=900 if profile in {'contacts-provider','sms-provider'} else 3600
                 result=collect_android(root,db,workspace,request['serial'],profile,request.get('pulls',[]),timeout,budget,
                                        request.get('max_sms',1000),request.get('android_user'),request.get('sms_prefix'))
-            elif platform=='ios': result=collect(root,db,workspace,platform,request['serial'],3600,budget)
+            elif platform=='ios':
+                timeout={'ios-apps':120,'ios-selected':900,'ios-backup':3600}[ios_profile]
+                result=collect(root,db,workspace,platform,request['serial'],timeout,budget,profile=ios_profile)
             else: raise UserError('Choose Android or iOS.')
             result['collection_status']=result['status']
             # Only the Android SMS provider indexes its own result. A stale

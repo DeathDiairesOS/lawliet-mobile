@@ -38,7 +38,12 @@ TOOLS = {
     "adb": ("Android logical triage collection", "Apache-2.0 + dependency notices", ["adb"]),
     "idevice_id": ("iOS device discovery", "LGPL-2.1+", ["idevice_id"]),
     "idevicebackup2": ("iOS logical backup collection", "LGPL-2.1+", ["idevicebackup2"]),
+    "ideviceinfo": ("iOS device metadata", "LGPL-2.1+", ["ideviceinfo"]),
+    "ideviceinstaller": ("iOS installed-app inventory", "GPL-2.0+", ["ideviceinstaller"]),
+    "pymobiledevice3": ("Optional database-only iOS backup retention", "GPL-3.0+", ["pymobiledevice3"]),
 }
+
+IOS_PROFILE_LIMITS = {'ios-apps': 16 * 1024**2, 'ios-selected': 256 * 1024**2}
 
 
 def config_path(workspace):
@@ -562,11 +567,21 @@ def devices(workspace):
     return result
 
 
-def collect(root, db, workspace, platform, serial, timeout=900, max_bytes=20 * 1024**3):
+def collect(root, db, workspace, platform, serial, timeout=900, max_bytes=20 * 1024**3, *, profile=None):
     if platform not in {"ios", "android"}:
         raise UserError("Collection platform must be ios or android.")
     if not serial or serial.startswith("-") or any(c.isspace() or c in "/\\" for c in serial):
         raise UserError("Supply a valid device serial/UDID from devices.")
+    if profile is not None:
+        if platform != 'ios' or profile not in {'ios-apps', 'ios-selected', 'ios-backup'}:
+            raise UserError('Choose a supported iPhone collection profile.')
+        max_bytes = min(max_bytes, IOS_PROFILE_LIMITS.get(profile, max_bytes))
+        if profile == 'ios-apps':
+            from .ios_apps import collect_apps
+            return collect_apps(root, db, workspace, serial, timeout, max_bytes)
+        if profile == 'ios-selected':
+            from .ios_backup import collect_selected
+            return collect_selected(root, db, workspace, serial, timeout, max_bytes)
     from .provider_contacts import _create_collection
     run_id = uuid.uuid4().hex[:12]
     try:

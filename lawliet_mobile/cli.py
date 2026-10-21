@@ -24,7 +24,7 @@ from .messages import conversations, import_chat
 from .discord_package import import_discord_package
 from .workflows import SCENARIOS, workflow
 from .review import review
-from .validation import preflight, validate_case
+from .validation import preflight, validate_case, ios_collection_profile
 from .phone_assessment import assess_android
 from .pipeline import process_evidence
 from .adapters import analyze_file as adapter_analyze_file, analyze as adapter_analyze, catalog as adapter_catalog
@@ -365,13 +365,14 @@ Original evidence is copied and hashed.""", formatter_class=argparse.RawDescript
     check = sub.add_parser("preflight", help="check tools and reserved acquisition storage without starting collection")
     check.add_argument("platform", choices=["android","ios"])
     check.add_argument("--max-gib", type=positive, default=20)
+    check.add_argument('--profile', choices=['ios-apps','ios-selected','ios-backup'], help='iPhone method (default: ios-apps); small profiles enforce their own lower storage ceiling')
     sub.add_parser("devices", help="list devices through ADB and libimobiledevice")
-    acquire = sub.add_parser("collect", help="collect a logical iOS backup or Android triage; live collection changes device state")
+    acquire = sub.add_parser("collect", help="collect scoped iPhone inventory/data or Android triage; live collection changes device state")
     acquire.add_argument("platform", choices=["ios", "android"])
     acquire.add_argument("--case", required=True)
     acquire.add_argument("--serial", required=True, help="explicit Android serial or iOS UDID")
     acquire.add_argument("--timeout", type=positive, default=900)
-    acquire.add_argument("--profile", choices=["triage", "messages", "logical", "files", "private-apps", "contacts-provider", "sms-provider", "trash-photos"], default="triage", help="Android collection scope; sms-provider reads permitted SMS observations without a collector app")
+    acquire.add_argument("--profile", choices=["triage", "messages", "logical", "files", "private-apps", "contacts-provider", "sms-provider", "trash-photos", "ios-apps", "ios-selected", "ios-backup"], help="iPhone default: ios-apps (16 MiB inventory); ios-selected (256 MiB message/contact databases), explicit ios-backup (logical backup). Android default: triage.")
     acquire.add_argument('--max-sms',type=positive,default=1000,help='SMS-provider record ceiling (1–20000); excessive ID sets are refused before field reads')
     acquire.add_argument('--android-user',type=int,help='Explicit nonnegative Android user/profile for SMS or contacts provider; otherwise observes the current user')
     acquire.add_argument('--sms-prefix',help='Optional literal body prefix selected by the SMS provider; no MMS/RCS completeness claim')
@@ -408,13 +409,19 @@ Open this case in Lawliet Mobile using the same workspace to review results.""",
   lawliet collect android --case CASE-001 --serial SERIAL --profile messages
   lawliet collect android --case CASE-001 --serial SERIAL --profile contacts-provider
   lawliet collect android --case CASE-001 --serial SERIAL --profile files --pull /sdcard/DCIM
-  lawliet preflight ios --max-gib 20
-  lawliet collect ios --case CASE-001 --serial UDID --max-gib 20
+  lawliet preflight ios --profile ios-apps
+  lawliet collect ios --case CASE-001 --serial UDID --profile ios-apps
+  lawliet collect ios --case CASE-001 --serial UDID --profile ios-selected
+  lawliet collect ios --case CASE-001 --serial UDID --profile ios-backup --max-gib 20
 
 Android triage gathers device metadata/logs, not private app databases.
 Messages requests a device-supported telephony backup; coverage varies.
-iOS uses a logical backup, not a full filesystem extraction.
-After collection: lawliet analyze --case CASE-001 --evidence EVIDENCE_ID --engine auto""",
+iPhone defaults to ios-apps: installed-app inventory and device metadata (16 MiB).
+ios-selected retains selected message/contact databases through the backup protocol
+(256 MiB); other payload bytes can pass over USB and are discarded. Full logical
+backup requires explicit ios-backup. None of these is a full filesystem extraction.
+iPhone profiles automatically run native indexing. For additional parser analysis:
+  lawliet analyze --case CASE-001 --evidence EVIDENCE_ID --engine auto""",
         "analyze": """Examples:
   lawliet analyze --case CASE-001 --evidence EVIDENCE_ID --engine auto
   lawliet analyze --case CASE-001 --evidence EVIDENCE_ID --engine ileapp
@@ -536,7 +543,7 @@ def dispatch(args):
         emit(result,True)
         return 0 if result.get('tool',{}).get('available') else 1
     if args.command == "preflight":
-        emit(preflight(Path(workspace),args.platform,args.max_gib*1024**3),True)
+        emit(preflight(Path(workspace),args.platform,args.max_gib*1024**3,args.profile),True)
         return 0
     if args.command == "devices":
         result = devices(workspace)
@@ -772,11 +779,22 @@ def dispatch(args):
             from .media import preview
             emit(preview(root, db, args.id), json_mode)
         elif args.command == "collect":
+            args.profile = ios_collection_profile(args.profile) if args.platform == 'ios' else args.profile or 'triage'
             if (args.sms_prefix is not None or args.max_sms!=1000) and not (args.platform=='android' and args.profile=='sms-provider'):
                 raise UserError('SMS limits/prefix options require Android --profile sms-provider.')
             if args.android_user is not None and not (args.platform=='android' and args.profile in {'sms-provider','contacts-provider'}):
                 raise UserError('Android user selection requires an Android SMS or contacts provider profile.')
-            if args.platform == "android" and args.profile == "private-apps":
+            if args.platform == 'ios':
+                if args.pull: raise UserError('iPhone profiles do not accept Android shared-storage paths.')
+                ready=preflight(Path(workspace),'ios',args.max_gib*1024**3,args.profile)
+                if not ready['ready']:raise UserError('iPhone acquisition preflight failed; check required tools and reserved storage.')
+                timeout=min(args.timeout,900) if args.profile=='ios-apps' else args.timeout
+                result=collect(root,db,workspace,'ios',args.serial,timeout,ready['budget_bytes'],profile=args.profile)
+                result['collection_status']=result['status']
+                if result.get('evidence_id'):
+                    result['analysis']=native_analyze(root,db,result['evidence_id'])
+                    if result['status']=='complete' and result['analysis'].get('status')!='complete':result['status']='partial'
+            elif args.platform == "android" and args.profile == "private-apps":
                 if args.pull: raise UserError('Private app collection uses fixed package paths, not --pull.')
                 from .private_apps import collect_private_apps
                 result = collect_private_apps(root, db, workspace, args.serial, args.timeout, args.max_gib * 1024**3)

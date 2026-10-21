@@ -15,7 +15,7 @@ from pathlib import Path
 from .core import begin_run_index, UserError, add_artifact, audit, json_text, now, verify
 from .messages import metadata, scope_message, telephony_records, ios_event_markers
 
-VERSION = "native/0.1.12"
+VERSION = "native/0.1.13"
 MAX_SQLITE_VALUE_BYTES = 8 * 1024**2
 
 
@@ -349,6 +349,18 @@ def _native_analyze_owned(root, db, evidence_id):
                         if (getattr(exc, 'sqlite_errorcode', 0) or 0) & 0xff == sqlite3.SQLITE_FULL:
                             raise
                         errors.append({"source": source["logical_path"], "error": str(exc)})
+                    continue
+                if path.name in {"ios-apps.plist", "ios-device.plist"}:
+                    try:
+                        from .ios_apps import inventory_records
+                        # Validate the complete bounded inventory before indexing
+                        # so a malformed later entry cannot imply a clean list.
+                        parsed = list(inventory_records(path))
+                        for category, when, raw, title, body, reference, data in parsed:
+                            count += add_artifact(db, evidence_id, source['id'], category, when, raw,
+                                title, body, reference, VERSION, data, run_id=run_id)
+                    except (OSError, ValueError, UserError) as exc:
+                        errors.append({'source': source['logical_path'], 'error': str(exc)})
                     continue
                 if Path(source['logical_path']).suffix.lower()=='.xml':
                     try:

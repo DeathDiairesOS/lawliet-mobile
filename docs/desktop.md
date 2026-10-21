@@ -9,6 +9,11 @@ This is a preview while operating-system qualification continues. The shared
 interface is not yet feature-identical to Swift. Platform-specific tool support
 is separate from desktop rendering support.
 
+For the installed-app inventory and selected message/contact database profiles,
+see [bounded iPhone acquisition](iphone-bounded-acquisition.md). Their storage,
+pairing and device-specific qualification limits are separate from the synthetic
+desktop workflow below.
+
 ## Validation status
 
 At `59c4f35`, the installed native application passed the complete synthetic

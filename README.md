@@ -551,6 +551,8 @@ be parsed.
 | iOS calls | `ZCALLRECORD` | Address, duration, call date in Apple seconds |
 | Safari browsing | `history_visits` + `history_items` | Visit URL/title and Apple-epoch visit time |
 | iOS contacts | `ABPerson` | Name/organization; modification timestamp, not contact creation |
+| iOS installed apps | `ios-apps.plist`, installation-service array | Bundle ID, supplied display name/version/type; undated inventory, not usage history |
+| iOS device metadata | `ios-device.plist` | Supplied device/model/iOS/build fields; undated |
 | Android SMS | `sms` with `body` | Message, address, type; Unix milliseconds |
 | Android calls | `calls` with `number` | Number/duration and Unix-millisecond date |
 | Android contacts | `data` + optional `mimetypes` | Raw contact data rows; no invented timestamp |
@@ -604,6 +606,8 @@ Tools are installed only when you explicitly run the setup installer.
 | ExifTool | CLI invocation, JSON metadata ingestion and evidence-file mapping | [ExifTool](https://github.com/exiftool/exiftool), Artistic or GPL |
 | ADB | Device discovery, explicit serial selection, logical triage collection | [ADB](https://developer.android.com/tools/adb), AOSP Apache-2.0 plus dependency notices |
 | libimobiledevice | iOS discovery and `idevicebackup2` logical backup | [libimobiledevice](https://github.com/libimobiledevice/libimobiledevice), LGPL-2.1+ for these utilities |
+| ideviceinstaller | Bounded installed-app inventory; no installation or removal | [ideviceinstaller](https://github.com/libimobiledevice/ideviceinstaller), GPL-2.0+ |
+| pymobiledevice3 11.41.2 | Optional external CLI for selected iOS database retention | [pymobiledevice3](https://github.com/doronz88/pymobiledevice3/tree/v11.41.2), GPL-3.0-or-later; separate environment, not bundled |
 
 LEAPP TSV imports preserve original fields and report-line references. They do
 **not** fabricate source-database hashes. A timestamp is normalized only when a
@@ -625,7 +629,7 @@ Representative customer extraction validation remains separate.
 ```bash
 ./lawliet devices
 ./lawliet collect android --case CASE-001 --serial ANDROID_SERIAL
-./lawliet collect ios --case CASE-001 --serial IOS_UDID
+./lawliet collect ios --case CASE-001 --serial IOS_UDID --profile ios-apps
 ./lawliet analyze --case CASE-001
 ```
 
@@ -688,33 +692,38 @@ qualify independently seeded field fidelity, other devices, MMS or RCS.
 Android collection gathers `getprop`, package inventory, an existing logcat buffer,
 and a bugreport. It does **not** acquire private app databases or a full filesystem;
 the bugreport ZIP is retained, but deep bugreport parsing is not implemented.
-iOS collection uses `idevicebackup2 backup --full`; "full" means a full **logical
-backup**, not a full filesystem extraction. Encrypted backups can be collected
-but must be decrypted separately for analysis.
 
-This iPhone method cannot request only messages or contacts. The storage budget
-is a stop threshold, not a selective-acquisition filter; stopping an oversized
-backup can leave an incomplete collection. For a small review, reuse an existing
-case or import a supplied export. The desktop hides Android-only scopes for an
-iPhone and reports collection and parsing status separately. A completed backup
-with incomplete native analysis is reported as partial overall.
+iPhone acquisition now has three explicit profiles in the CLI and desktop:
 
-Upstream [pymobiledevice3](https://doronz88.github.io/pymobiledevice3/cli/backup2/)
-now supports filtered backup retention through `--only` / `--only-regex`. This is
-not integrated or device-qualified in LAWLIET yet. The first backup still sends
-all eligible bytes; filtering avoids saving rejected payloads. A database-only
-profile must preserve SQLite sidecars when supplied, retain the original manifest
-and record intentional omissions. The `messages` preset includes attachments;
-it is not a database-only storage profile. Do not confuse a retained-byte limit
-with a guarantee that the device's backup free-space check will pass.
+| Profile | Retained scope | Storage policy |
+|---|---|---|
+| `ios-apps` (default) | Installed-app and device metadata; no backup | 16 MiB collection threshold |
+| `ios-selected` | SMS/iMessage and AddressBook databases, supplied WAL/SHM, original backup metadata and omission receipts | 256 MiB collection threshold; requires optional pymobiledevice3 11.41.2 |
+| `ios-backup` | Existing `idevicebackup2 backup --full` logical-backup route | Explicit selection and examiner-chosen budget |
 
-Installed-app metadata can be read separately using the official
-[ideviceinstaller](https://github.com/libimobiledevice/ideviceinstaller) utility.
-An October 2026 direct USB test returned 352 unique application identifiers in a
-136,838-byte XML plist, which was hashed and imported through the existing derived
-report route. This tested inventory retrieval and GUI review, not a new built-in
-one-click collector or private application content acquisition. Contacts can also
-be supplied as a native iPhone vCard export without a full backup.
+Successful acquired evidence is imported, hashed and automatically parsed into
+the existing Applications, Device, Messages, Contacts and artifact views. Results
+keep collection and analysis status separate. A completed collection with
+incomplete native analysis is partial overall. No failed small profile falls
+back to a full backup. See the [bounded iPhone acquisition guide](docs/iphone-bounded-acquisition.md)
+for installation, commands, review steps and coverage limits.
+
+Selected retention still runs Apple's backup protocol: excluded payload bytes
+can cross USB, and the phone may require whole-backup free space or an on-device
+passcode confirmation. It saves the two selected databases without attachment or
+contact-image payloads; it does not produce a restorable backup. The full original
+manifest stays unchanged, so generic backup validation correctly reports omitted
+payloads as incomplete. Unknown or encrypted backup state stops the selected
+profile without changing encryption settings. Explicit `ios-backup` can preserve
+an encrypted backup, but analysis still needs a separately decrypted extraction.
+
+On 21 October 2026, the integrated inventory route returned 352 app observations
+and one device record, with approximately 8.1 MiB of preserved evidence; staging
+and indexes add storage. Independent raw-plist/index comparison passed. This is
+inventory qualification on the observed phone, not private app-content access or
+device-wide completeness. Selected database acquisition has synthetic checks;
+the live attempt is awaiting on-phone passcode confirmation and is not yet
+qualified as successful. Contacts can also be imported from a supplied vCard.
 
 Live collection changes device state. Commands have timeouts; failures and partial
 collections are recorded. No unlocking, root installation, jailbreak, reset,

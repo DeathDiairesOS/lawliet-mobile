@@ -7,7 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from lawliet_mobile.app_backend import handle
-from lawliet_mobile.core import create_case, import_evidence
+from lawliet_mobile.core import UserError, create_case, import_evidence
 
 
 class IOSCollectionBridgeTests(unittest.TestCase):
@@ -36,14 +36,14 @@ class IOSCollectionBridgeTests(unittest.TestCase):
         return handle(self.workspace, {'action': action, 'case': 'QC', 'platform': 'ios',
             'serial': 'SYNTHETIC', 'max_gib': 1, **kwargs})
 
-    def collected(self, root, db, *_):
+    def collected(self, root, db, *_, **kwargs):
         evidence = import_evidence(root, db, self.source, 'ios')[0]
         return {'status': 'complete', 'evidence_id': evidence}
 
-    def test_stale_android_sms_selection_still_parses_iphone_into_gui(self):
+    def test_explicit_iphone_profile_parses_into_gui(self):
         with patch('lawliet_mobile.app_backend.collect', side_effect=self.collected), \
              patch('lawliet_mobile.app_backend.collect_android') as android:
-            result = self.call(profile='sms-provider')
+            result = self.call(profile='ios-selected')
         android.assert_not_called()
         self.assertEqual(result['collection_status'], 'complete')
         self.assertEqual(result['status'], 'complete')
@@ -56,10 +56,18 @@ class IOSCollectionBridgeTests(unittest.TestCase):
         self.assertIn('message:rowid=1', records[0]['source_ref'])
         self.assertTrue(self.call('verify')['ok'])
 
+    def test_stale_android_profile_cannot_start_an_iphone_backup(self):
+        with patch('lawliet_mobile.app_backend.collect') as collector, \
+             patch('lawliet_mobile.app_backend.collect_android') as android:
+            with self.assertRaisesRegex(UserError, 'iPhone collection profile'):
+                self.call(profile='sms-provider')
+        collector.assert_not_called()
+        android.assert_not_called()
+
     def test_corrupt_source_keeps_good_records_and_reports_partial_analysis(self):
         (self.source / 'corrupt.db').write_bytes(b'SQLite format 3\x00' + b'broken' * 24)
         with patch('lawliet_mobile.app_backend.collect', side_effect=self.collected):
-            result = self.call(profile='messages')
+            result = self.call(profile='ios-selected')
         self.assertEqual(result['collection_status'], 'complete')
         self.assertEqual(result['status'], 'partial')
         self.assertEqual(result['analysis']['status'], 'partial')

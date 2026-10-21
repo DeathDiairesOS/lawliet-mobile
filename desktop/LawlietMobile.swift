@@ -539,7 +539,8 @@ struct ContentView: View {
     @State private var dateOrder="dmy";@State private var zone="";@State private var secret=""
     @State private var yearCentury="";@State private var chatPath=""
     private var centuryError:String {do {_ = try ChatDateInterpretation.centuryFields(yearCentury);return ""} catch {return error.localizedDescription}}
-    @State private var selectedDevice="";@State private var budget=20;@State private var profile="messages"
+    @State private var selectedDevice="";@State private var budget=20;@State private var profile="messages";@State private var iosProfile="ios-apps"
+    @State private var acquisitionReadiness=""
     @State private var sharedPath="/sdcard/DCIM"
     @State private var engine="auto";@State private var sqliteID=0
     @State private var recoveryEngine="sqlite-dissect"
@@ -709,7 +710,7 @@ struct ContentView: View {
                     Text("No decryption ran. For an already decoded database or extraction, use Acquired evidence · import & analyze.").font(.caption).foregroundStyle(LawlietTheme.secondary)
                 }
             } else if kind == .acquire {
-                Text("Acquire connected phone").font(.title2);Text("Host free space: \(m.freeGiB.formatted()) GiB. Collection stops at its storage limit and reserves room for evidence intake.").foregroundStyle(LawlietTheme.secondary)
+                Text("Acquire connected phone").font(.title2);Text("Host free space: \(m.freeGiB.formatted()) GiB. Periodic storage checks stop oversized collections and reserve room for evidence intake; temporary overshoot is possible.").foregroundStyle(LawlietTheme.secondary)
                 Picker("Device",selection:$selectedDevice){Text("Choose device").tag("");ForEach(m.devices){d in Text("\(d.platform) · \(d.id) · \(d.status)").tag(d.id)}}
                 if m.devices.first(where:{$0.id==selectedDevice})?.platform == "android" {
                 Picker("Android scope",selection:$profile){Text("Telephony messages").tag("messages");Text("SMS · readable provider").tag("sms-provider");Text("Contacts · readable provider").tag("contacts-provider");Text("Gallery Trash · accessible photos").tag("trash-photos");Text("Logical triage + telephony").tag("logical");Text("Shared files · explicit folder").tag("files");Text("Private apps · existing root required").tag("private-apps")}
@@ -719,14 +720,28 @@ struct ContentView: View {
                 if profile=="files" {TextField("Android shared folder",text:$sharedPath);Text("Only this folder is requested. Private app storage remains outside shared-file access.").font(.caption).foregroundStyle(LawlietTheme.secondary)}
                 Button("Assess Android access"){m.assessAndroid(selectedDevice)}.disabled(m.busy)
                 }
-                if ["contacts-provider","sms-provider"].contains(profile) && m.devices.first(where:{$0.id==selectedDevice})?.platform=="android" {Text("Provider export budget: 64 MiB").font(.caption)} else {Stepper("Storage limit: \(budget) GiB",value:$budget,in:1...500)}
+                if ["contacts-provider","sms-provider"].contains(profile) && m.devices.first(where:{$0.id==selectedDevice})?.platform=="android" {Text("Provider export budget: 64 MiB").font(.caption)} else if m.devices.first(where:{$0.id==selectedDevice})?.platform != "ios" || iosProfile=="ios-backup" {Stepper("Storage limit: \(budget) GiB",value:$budget,in:1...500)}
                 if m.devices.first(where:{$0.id==selectedDevice})?.platform == "ios" {
-                    Text("iPhone · logical backup").font(.headline)
-                    Text("This method requests all backup-eligible data. It cannot select only messages or contacts. The storage limit stops an oversized backup; it does not select a smaller dataset. To review without another backup, open an existing case or import a supplied export.").font(.caption).foregroundStyle(LawlietTheme.secondary)
-                    Text("Unlock and trust the iPhone. A logical backup is not a full filesystem image. Live collection changes device state; private app access is not guaranteed.").font(.caption).foregroundStyle(LawlietTheme.secondary)
+                    Picker("iPhone scope",selection:$iosProfile){Text("Installed apps · 16 MiB").tag("ios-apps");Text("Messages & contacts · 256 MiB").tag("ios-selected");Text("Logical backup").tag("ios-backup")}
+                    if iosProfile=="ios-apps" {Text("Collects installed application metadata and device information without a backup. Private app contents are outside this scope.").font(.caption).foregroundStyle(LawlietTheme.secondary)}
+                    else if iosProfile=="ios-selected" {Text("Keeps message and contact databases with supplied SQLite companions. Attachments and other payloads are omitted. The backup stream still crosses USB and may require phone confirmation or more free space. Encrypted selected backups need a separate supported route. No automatic full-backup fallback.").font(.caption).foregroundStyle(LawlietTheme.secondary)}
+                    else {Text("Requests all backup-eligible data. The storage threshold stops an oversized backup and can leave it incomplete. Encrypted backups require separate decryption before parsing.").font(.caption).foregroundStyle(LawlietTheme.secondary)}
+                    Text("Unlock and trust the selected iPhone. Starting collection authorizes this method for the current case. Live collection changes device state.").font(.caption).foregroundStyle(LawlietTheme.secondary)
                 }
-                Button("Check storage & tools"){guard let d=m.devices.first(where:{$0.id==selectedDevice}) else {return};m.perform("Checking acquisition readiness…"){let r=try await m.request("preflight",["case":m.caseID,"platform":d.platform,"profile":profile,"max_gib":budget]) as? [String:Any] ?? [:];let required=(r["required_bytes"] as? Double ?? 0)/1073741824;m.notice="\(r["ready"] as? Bool == true ? "Storage and tools ready" : "Not ready"). Required free space: \(required.formatted()) GiB. This reserves acquisition and evidence copies; phone size and access are not guaranteed.";m.showNotice=true}}.disabled(selectedDevice.isEmpty || m.busy)
-                Button(m.devices.first(where:{$0.id==selectedDevice})?.platform == "ios" ? "Start logical backup" : "Start acquisition"){guard let d=m.devices.first(where:{$0.id==selectedDevice}) else {return};m.dialog=nil;m.perform("Collecting phone data; keep the device connected…"){let r=try await m.request("collect",["case":m.caseID,"serial":d.id,"platform":d.platform,"profile":d.platform=="android" ? profile : "triage","pulls":d.platform=="android" && profile=="files" ? [sharedPath] : [],"max_gib":budget]) as? [String:Any] ?? [:];m.sourceID="";try await m.loadCase();m.notice="Overall: \(r["status"] as? String ?? "unknown") · collection: \(r["collection_status"] as? String ?? "unknown"). Check Evidence & processing for parsing status and coverage.";m.showNotice=true}}.disabled(selectedDevice.isEmpty)
+                Button("Check storage & tools"){
+                    guard let d=m.devices.first(where:{$0.id==selectedDevice}) else {return}
+                    acquisitionReadiness="Checking storage and installed tools…"
+                    m.perform("Checking acquisition readiness…",onError:{acquisitionReadiness=$0.localizedDescription}){
+                        let r=try await m.request("preflight",["case":m.caseID,"platform":d.platform,"profile":d.platform=="ios" ? iosProfile : profile,"max_gib":budget]) as? [String:Any] ?? [:]
+                        let required=(r["required_bytes"] as? Double ?? 0)/1073741824
+                        let missing=r["missing_tools"] as? [String] ?? []
+                        acquisitionReadiness="\(r["ready"] as? Bool == true ? "Storage and tools ready" : "Not ready"). Required free space: \(required.formatted()) GiB. Phone authorization and actual backup access still need assessment."
+                        if !missing.isEmpty {acquisitionReadiness += " Missing tools: " + missing.joined(separator:", ")}
+                    }
+                }.disabled(selectedDevice.isEmpty || m.busy)
+                if !acquisitionReadiness.isEmpty {Text(acquisitionReadiness).font(.caption).textSelection(.enabled)}
+                Color.clear.frame(height:0).onChange(of:selectedDevice){_ in acquisitionReadiness=""}.onChange(of:iosProfile){_ in acquisitionReadiness=""}.onChange(of:profile){_ in acquisitionReadiness=""}.onChange(of:budget){_ in acquisitionReadiness=""}
+                Button("Start acquisition"){guard let d=m.devices.first(where:{$0.id==selectedDevice}) else {return};m.dialog=nil;m.perform("Collecting phone data; keep the device connected…"){let r=try await m.request("collect",["case":m.caseID,"serial":d.id,"platform":d.platform,"profile":d.platform=="android" ? profile : iosProfile,"pulls":d.platform=="android" && profile=="files" ? [sharedPath] : [],"max_gib":budget]) as? [String:Any] ?? [:];m.sourceID="";try await m.loadCase();m.notice="Overall: \(r["status"] as? String ?? "unknown") · collection: \(r["collection_status"] as? String ?? "unknown"). Check Evidence & processing for parsing status and coverage.";let failures=(r["errors"] as? [Any] ?? []).prefix(3).compactMap{($0 as? String) ?? ($0 as? [String:Any])?["detail"] as? String};if !failures.isEmpty {m.notice += "\n" + failures.map{String($0.prefix(500))}.joined(separator:"\n")};m.showNotice=true}}.disabled(selectedDevice.isEmpty)
             } else if kind == .analyze {
                 Text("Analyze selected evidence").font(.title2);Picker("Engine",selection:$engine){Text("Automatic · ALEAPP / iLEAPP").tag("auto");Text("Native + media index").tag("native");Text("iLEAPP (iOS)").tag("ileapp");Text("ALEAPP (Android)").tag("aleapp");Text("ExifTool media metadata").tag("exiftool")}
                 Text("Optional engines must be configured in this workspace. Analysis uses working copies.").foregroundStyle(LawlietTheme.secondary)

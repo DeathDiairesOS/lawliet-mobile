@@ -207,10 +207,26 @@ def display_record(row):
                        [('Name',' / '.join(names)),('Phone number','\n'.join(phones)),('Email','\n'.join(emails))],
                        'Search result is a source observation. Open Contacts to assemble source-local contact fields.')
     if row['category']=='apps' and row['parser'].startswith('native/'):
+        if data.get('parser_version') == 'ios-app-inventory/1' and isinstance(data.get('original'), dict):
+            original = data['original']
+            return project(row, 'app-inventory', supplied(original, 'CFBundleDisplayName', 'CFBundleName', 'CFBundleIdentifier') or row['title'],
+                           [('Application', supplied(original, 'CFBundleDisplayName', 'CFBundleName')),
+                            ('Bundle ID', text(original.get('CFBundleIdentifier'))),
+                            ('Version', text(original.get('CFBundleShortVersionString'))),
+                            ('Build version', text(original.get('CFBundleVersion'))),
+                            ('Application type', text(original.get('ApplicationType')))],
+                           text(data.get('scope')))
         return project(row,'app-inventory',text(data.get('package')) or row['title'],
                        [('Package ID',text(data.get('package'))),('APK path',text(data.get('apk_path')))],
                        'Observed package inventory. Presence does not establish use; overlapping acquisitions remain separate source observations.')
     if row['category']=='device' and row['parser'].startswith('native/'):
+        if data.get('parser_version') == 'ios-app-inventory/1' and isinstance(data.get('original'), dict):
+            original = data['original']
+            fields = [('Device name', 'DeviceName'), ('Model identifier', 'ProductType'),
+                      ('iOS version', 'ProductVersion'), ('Build version', 'BuildVersion'),
+                      ('Hardware model', 'HardwareModel'), ('Device identifier', 'UniqueDeviceID')]
+            return project(row, 'device', row['title'], [(label, text(original.get(key))) for label, key in fields],
+                           text(data.get('scope')))
         device_fields=[('Manufacturer','ro.product.manufacturer'),('Model','ro.product.model'),
                        ('Android version','ro.build.version.release'),('Build','ro.build.display.id'),
                        ('Security patch','ro.build.version.security_patch'),('Build fingerprint','ro.build.fingerprint')]

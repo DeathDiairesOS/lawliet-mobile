@@ -11,7 +11,7 @@ from pathlib import Path
 from .core import UserError, audit, digest, json_text, now, iter_artifacts, verify
 from .parsers import timestamp
 from .media import attachment_rows, resolve_attachment
-from .tools import doctor
+from .tools import doctor, IOS_PROFILE_LIMITS
 from .report_validation import reconcile_reports
 
 
@@ -35,14 +35,30 @@ def working_sqlite(root, evidence, file, files):
             yield c,sidecars
 
 
-def preflight(workspace, platform, max_bytes):
-    if platform not in {'ios','android'} or max_bytes<=0: raise UserError('Invalid acquisition scope or storage budget.')
+def ios_collection_profile(value=None):
+    if value is None:
+        return 'ios-apps'
+    if not isinstance(value, str) or value not in {'ios-apps','ios-selected','ios-backup'}:
+        raise UserError('Choose a supported iPhone collection profile.')
+    return value
+
+
+def preflight(workspace, platform, max_bytes, profile=None):
+    if platform not in {'ios','android'} or type(max_bytes) is not int or max_bytes<=0:
+        raise UserError('Invalid acquisition scope or storage budget.')
+    if platform == 'ios':
+        profile = ios_collection_profile(profile)
+    elif profile is not None:
+        raise UserError('iPhone collection profiles cannot be used for Android.')
+    max_bytes=min(max_bytes,IOS_PROFILE_LIMITS.get(profile,max_bytes))
     free=shutil.disk_usage(workspace).free
     required=2*max_bytes+1024**3
     required_tools=['idevice_id','idevicebackup2'] if platform=='ios' else ['adb']
+    if profile=='ios-apps':required_tools=['idevice_id','ideviceinfo','ideviceinstaller']
+    if profile=='ios-selected':required_tools=['idevice_id','ideviceinfo','pymobiledevice3']
     inventory=doctor(workspace)['tools']
     missing=[name for name in required_tools if not any(t['tool']==name and t['available'] for t in inventory)]
-    return {'platform':platform,'free_bytes':free,'budget_bytes':max_bytes,'required_bytes':required,
+    return {'platform':platform,'profile':profile,'free_bytes':free,'budget_bytes':max_bytes,'required_bytes':required,
             'storage_ready':free>=required,'missing_tools':missing,'ready':free>=required and not missing,
             'note':'Reserves acquisition plus evidence-copy budget and 1 GiB headroom. Budget is not an estimate of phone contents. Device authorization and actual backup size still need assessment.'}
 
