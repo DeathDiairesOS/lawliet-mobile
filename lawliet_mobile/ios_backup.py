@@ -16,6 +16,7 @@ import tempfile
 import time
 import uuid
 
+from .anchored_output import OutputFiles
 from .child_output import ChildOutputs
 from .core import UserError, audit, digest, import_evidence, json_text, now
 from .iphone_connection import UDID, require_local_usb_environment
@@ -150,6 +151,19 @@ def _database_copy(path, folder, max_bytes):
             yield db
 
 
+@contextmanager
+def _omission_inventory(path):
+    """Stream a new inventory without releasing the protected parent directory."""
+    with OutputFiles([path]) as output:
+        with output.open(path) as stream:
+            yield stream
+            stream.flush()
+            os.fsync(stream.fileno())
+        # Windows path-based replace reopens the pinned parent for writing.
+        # OutputFiles publishes by held handle and refuses preexisting names.
+        output.publish()
+
+
 def _inspect_backup(folder, serial, max_bytes):
     backup = folder / 'backup' / serial
     _files(folder)
@@ -181,9 +195,8 @@ def _inspect_backup(folder, serial, max_bytes):
     payloads, selected_seen, excluded = [], set(), 0
     removed_placeholders = []
     output = folder / 'omissions.jsonl'
-    temporary = folder / 'omissions.tmp'
     produced = 0
-    with _database_copy(backup / 'Manifest.db', folder, max_bytes) as db, temporary.open('x', encoding='utf-8') as omitted:
+    with _database_copy(backup / 'Manifest.db', folder, max_bytes) as db, _omission_inventory(output) as omitted:
         base_bytes = sum(_files(folder).values())
         if db.execute('PRAGMA quick_check(1)').fetchone()[0] != 'ok':
             raise UserError('Backup Manifest.db failed SQLite integrity validation.')
@@ -226,7 +239,6 @@ def _inspect_backup(folder, serial, max_bytes):
                 if number % 1024 == 0 and shutil.disk_usage(folder).free < RESERVE:
                     raise UserError('Free-space reserve reached while writing omission inventory.')
                 omitted.write(line)
-    os.replace(temporary, output)
     for relative in BASE_PATHS:
         if relative not in selected_seen:
             errors.append('Requested database not present in backup manifest: HomeDomain/' + relative)

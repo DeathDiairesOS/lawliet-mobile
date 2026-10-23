@@ -13,7 +13,7 @@ from unittest.mock import patch
 
 from lawliet_mobile.core import UserError, connect, create_case, digest, verify
 from lawliet_mobile.child_output import ChildOutputs
-from lawliet_mobile.ios_backup import BASE_PATHS, DATABASE_REGEX, VERSION, _atomic_receipt, _backup_failure, collect_selected
+from lawliet_mobile.ios_backup import BASE_PATHS, DATABASE_REGEX, VERSION, _atomic_receipt, _backup_failure, _inspect_backup, collect_selected
 
 SERIAL = '00008120-0012345678901234'
 
@@ -149,6 +149,14 @@ class SelectedIPhoneTests(unittest.TestCase):
         result, _ = self.exercise()
         self.assertEqual(result['status'], 'complete', result['errors'])
         self.assertIsNotNone(result['evidence_id'])
+
+    def test_omission_publication_failure_is_audited_without_import(self):
+        with patch('lawliet_mobile.ios_backup.OutputFiles.publish', side_effect=OSError('Synthetic omission publication failed')):
+            result, _ = self.exercise()
+        self.assertEqual(result['status'], 'failed')
+        self.assertIsNone(result['evidence_id'])
+        self.assertIsNone(result['selection'])
+        self.assertIn('Synthetic omission publication failed', ' '.join(result['errors']))
 
     def test_missing_declared_sidecar_is_partial_not_intentional_omission(self):
         result, _ = self.exercise(missing=True)
@@ -320,6 +328,82 @@ class SelectedIPhoneTests(unittest.TestCase):
                 self.assertEqual(terminal['status'], 'failed')
                 self.assertIsNone(terminal['evidence_id'])
             self.assertEqual(list(outside.iterdir()), [])
+
+
+class OmissionPublicationTests(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.base = Path(temporary.name).resolve()
+        self.folder = self.base / 'attempt'
+        self.backup = fixture_backup(self.folder / 'backup')
+        self.originals = {path: digest(path) for path in self.backup.rglob('*')
+                          if path.is_file() and path.stat().st_size}
+        self.output = self.folder / 'omissions.jsonl'
+
+    def assert_originals_unchanged(self):
+        self.assertEqual({path: digest(path) for path in self.originals}, self.originals)
+
+    def inspect(self, budget=256 * 1024**2):
+        # Retain the same outer directory protection as a real collection.
+        with ChildOutputs(self.folder):
+            return _inspect_backup(self.folder, SERIAL, budget)
+
+    def test_streamed_inventory_publishes_exact_utf8_bytes_under_live_parent_handle(self):
+        result = self.inspect()
+        expected = [{'file_id': hashlib.sha1(('HomeDomain-' + path).encode()).hexdigest(),
+                     'domain': 'HomeDomain', 'relative_path': path, 'flags': 1,
+                     'reason': 'outside_selected_scope'} for path in (
+                         'Library/SMS/Attachments/video.mov',
+                         'Library/AddressBook/AddressBookImages.sqlitedb')]
+        raw = self.output.read_bytes()
+        expected_raw = ''.join(json.dumps(row, ensure_ascii=False, sort_keys=True) + '\n'
+                               for row in expected).encode('utf-8')
+        self.assertEqual(raw, expected_raw)
+        self.assertTrue(raw.endswith(b'\n'))
+        self.assertNotIn(b'\r', raw)
+        self.assertEqual(result['omission_inventory_sha256'], hashlib.sha256(raw).hexdigest())
+        self.assertEqual(result['excluded_manifest_entries'], 2)
+        self.assertEqual({path.name for path in self.folder.iterdir()}, {'backup', 'omissions.jsonl'})
+        self.assert_originals_unchanged()
+
+    def test_existing_output_regular_link_and_hardlink_are_never_overwritten(self):
+        outside = self.base / 'outside'
+        outside.write_bytes(b'Preserved foreign bytes')
+        for kind in ('regular', 'symlink', 'hardlink'):
+            with self.subTest(kind=kind):
+                if kind == 'regular':
+                    self.output.write_bytes(b'Preserved existing output')
+                elif kind == 'symlink':
+                    self.output.symlink_to(outside)
+                else:
+                    os.link(outside, self.output)
+                try:
+                    with self.assertRaises((UserError, OSError)):
+                        self.inspect()
+                    self.assertEqual(outside.read_bytes(), b'Preserved foreign bytes')
+                    self.assertEqual(self.output.read_bytes(), b'Preserved existing output' if kind == 'regular'
+                                     else b'Preserved foreign bytes')
+                    self.assertEqual({path.name for path in self.folder.iterdir()}, {'backup', 'omissions.jsonl'})
+                    self.assert_originals_unchanged()
+                finally:
+                    self.output.unlink()
+
+    def test_failed_publication_cleans_only_owned_staging_and_preserves_sources(self):
+        with patch('lawliet_mobile.ios_backup.OutputFiles.publish', side_effect=OSError('Synthetic publication failure')):
+            with self.assertRaisesRegex(OSError, 'Synthetic publication failure'):
+                self.inspect()
+        self.assertEqual({path.name for path in self.folder.iterdir()}, {'backup'})
+        self.assert_originals_unchanged()
+
+    def test_budget_failure_leaves_no_successful_or_staged_inventory(self):
+        # Leave room for the validation copy, but not even the first omitted row.
+        existing = sum(path.stat().st_size for path in self.backup.rglob('*') if path.is_file())
+        budget = existing + (self.backup / 'Manifest.db').stat().st_size + 1
+        with self.assertRaisesRegex(UserError, 'Omission inventory exceeds collection byte budget'):
+            self.inspect(budget)
+        self.assertEqual({path.name for path in self.folder.iterdir()}, {'backup'})
+        self.assert_originals_unchanged()
 
 
 if __name__ == '__main__':

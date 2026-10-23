@@ -172,6 +172,12 @@ for `native/0.1.13`. Exact parser identities remain checked; unknown versions ar
 still rejected. The Android qualification oracle was explicitly requalified for
 the new parser label without changing its raw evidence or expected source fields.
 
+The full Windows suite also exposed an omission-inventory publication conflict
+with the collection's protected parent directory. Omission records now use the
+existing anchored output writer, preserving directory protection and refusing
+preexisting output files. Selected-backup tests run in the focused Windows
+acquisition gate as well as the full suite.
+
 The USB routes now refuse inherited usbmux/tunnel/device-fallback overrides
 before collection. Errors identify environment variable names without exposing
 their values. Remove the reported overrides from LAWLIET's launch environment and
