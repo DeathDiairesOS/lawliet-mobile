@@ -163,3 +163,33 @@ LAWLIET retained the attempt logs, reported failure and imported no evidence.
 Successful physical message/contact collection has **not** yet been established.
 Unlock the phone and accept the next backup prompt on the phone before a new
 attempt can qualify this route. Synthetic results do not replace that check.
+
+### Software follow-up, 22 October 2026
+
+Cross-platform checks found and corrected Windows path separators in selected
+backup validation and an isolated-worker schema gate that had not been updated
+for `native/0.1.13`. Exact parser identities remain checked; unknown versions are
+still rejected. The Android qualification oracle was explicitly requalified for
+the new parser label without changing its raw evidence or expected source fields.
+
+The USB routes now refuse inherited usbmux/tunnel/device-fallback overrides
+before collection. Errors identify environment variable names without exposing
+their values. Remove the reported overrides from LAWLIET's launch environment and
+restart; the application never changes the shared process environment itself.
+
+Seven optional tests also exercise the actual pinned pymobiledevice3 CLI and
+file-transfer implementation with synthetic binary streams. They passed locally
+with socket connections forbidden, including selected WAL retention, discarded
+payloads, temporary-path moves and protocol failures. To reproduce in the pinned
+tool environment, run from the source checkout:
+
+```sh
+LAWLIET_PYMOBILEDEVICE3_CONTRACT=1 /path/to/pymobiledevice3-venv/bin/python \
+  -m unittest tests.test_ios_upstream_contract -v
+```
+
+These checks do not replace the pending physical message/contact test. Excluded
+payload bytes still cross the transport, temporary placeholders count toward the
+100,000-file limit, and the original manifest itself can exceed the retention
+budget. The disk guard is not a memory quota for the external tool's incoming
+protocol frames. Unsupported or oversized collections must remain visible failures.

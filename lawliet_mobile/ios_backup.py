@@ -18,7 +18,7 @@ import uuid
 
 from .child_output import ChildOutputs
 from .core import UserError, audit, digest, import_evidence, json_text, now
-from .iphone_connection import UDID
+from .iphone_connection import UDID, require_local_usb_environment
 from .provider_contacts import _create_collection
 from .runner_lease import lease
 from .tools import command, execute, storage_guard
@@ -257,10 +257,10 @@ def _inspect_backup(folder, serial, max_bytes):
                         raise sqlite3.DatabaseError('expected table absent: ' + expected)
             except sqlite3.DatabaseError as exc:
                 errors.append('Selected database validation failed: ' + relative + ': ' + str(exc))
-    expected_paths = {str((backup / name).relative_to(folder)) for name in METADATA}
+    expected_paths = {(backup / name).relative_to(folder).as_posix() for name in METADATA}
     expected_paths.update(p['path'] for p in payloads)
     for path in _files(backup):
-        if str((backup / path).relative_to(folder)) not in expected_paths:
+        if (backup / path).relative_to(folder).as_posix() not in expected_paths:
             raise UserError('Unrecognized backup output remains; no evidence imported.')
     if any(digest(backup / name) != value for name, value in metadata_hashes.items()):
         raise UserError('Original backup metadata changed during validation.')
@@ -277,6 +277,7 @@ def collect_selected(root, db, workspace, serial, timeout=900, max_bytes=256 * 1
         raise UserError('Select an explicit USB iPhone identifier.')
     if type(timeout) is not int or not 1 <= timeout <= 3600 or type(max_bytes) is not int or not 1024**2 <= max_bytes <= 2 * 1024**3:
         raise UserError('Invalid selected iPhone acquisition timeout or byte budget.')
+    require_local_usb_environment()
     # Resolve dependencies before any phone command or attempt output.
     cmd = command(workspace, 'pymobiledevice3')
     info_tool = command(workspace, 'ideviceinfo')

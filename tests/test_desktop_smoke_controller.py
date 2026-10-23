@@ -73,6 +73,13 @@ class NativeQualificationReceiptTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'citation.*source_ref'):
             _check_selected_snapshot(fixture, wrong)
 
+    def test_selected_citation_preserves_the_qualified_parser_identity(self):
+        fixture, outcome = self.exported()
+        selected = outcome['selected_finding_snapshot']
+        _check_selected_snapshot(fixture, selected)
+        with self.assertRaisesRegex(ValueError, 'citation.*parser'):
+            _check_selected_snapshot(fixture, {**selected, 'parser': 'native/0.1.12'})
+
     def test_export_refuses_replaced_manifest_and_wrong_report_receipt(self):
         fixture, outcome = self.exported()
         path = Path(fixture['export_path'])

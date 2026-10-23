@@ -54,6 +54,24 @@ class CodecTests(unittest.TestCase):
         self.assertEqual(row['data']['raw_record']['file_id'], 999)
         self.assertEqual(list(result.iter_artifacts()), list(result.iter_artifacts()))
 
+    def test_reviewed_parser_versions_remain_exactly_bound(self):
+        for version in ('native/0.1.12', 'native/0.1.13'):
+            with self.subTest(version=version):
+                self.bindings['native_parser_version'] = version
+                self.row['parser'] = version
+                self.assertEqual(next(self.validate().iter_artifacts())['parser'], version)
+                other = 'native/0.1.12' if version == 'native/0.1.13' else 'native/0.1.13'
+                self.reject(rows=[{**self.row, 'parser': other}])
+                self.reject(header={'kind': 'header', **self.bindings, 'native_parser_version': other})
+        self.bindings['native_parser_version'] = self.row['parser'] = 'native/999.0'
+        with self.assertRaisesRegex(codec.ValidationError, 'Unsupported native schema version'):
+            self.validate()
+
+    def test_current_parser_requires_explicit_codec_qualification(self):
+        from lawliet_mobile.parsers import VERSION
+        self.assertIn(VERSION, codec.SUPPORTED_NATIVE_VERSIONS,
+                      'Parser changed: review the host codec and qualify its output before enabling this version.')
+
     def test_legacy_nonfinite_inner_retained(self):
         self.row['data_json'] = json_text({'a': float('nan'), 'b': float('inf'), 'c': -float('inf')})
         row = next(self.validate().iter_artifacts())

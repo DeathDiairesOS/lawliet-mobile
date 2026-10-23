@@ -540,6 +540,14 @@ def devices(workspace):
     result = []
     with tempfile.TemporaryDirectory(prefix="lawliet-discovery-") as tmp:
         for platform, name, args in [("android", "adb", ["devices", "-l"]), ("ios", "idevice_id", ["-l"])]:
+            if platform == 'ios':
+                from .iphone_connection import require_local_usb_environment
+                try:
+                    require_local_usb_environment()
+                except UserError as exc:
+                    result.append({'platform': platform, 'status': 'discovery_refused', 'tool': name,
+                                   'error': str(exc)})
+                    continue
             try:
                 cmd = command(workspace, name)
             except UserError:
@@ -570,6 +578,9 @@ def devices(workspace):
 def collect(root, db, workspace, platform, serial, timeout=900, max_bytes=20 * 1024**3, *, profile=None):
     if platform not in {"ios", "android"}:
         raise UserError("Collection platform must be ios or android.")
+    if platform == 'ios':
+        from .iphone_connection import require_local_usb_environment
+        require_local_usb_environment()
     if not serial or serial.startswith("-") or any(c.isspace() or c in "/\\" for c in serial):
         raise UserError("Supply a valid device serial/UDID from devices.")
     if profile is not None:

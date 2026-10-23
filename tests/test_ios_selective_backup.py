@@ -1,5 +1,6 @@
 import hashlib
 import json
+import os
 from contextlib import closing
 from pathlib import Path
 import plistlib
@@ -146,12 +147,12 @@ class SelectedIPhoneTests(unittest.TestCase):
 
     def test_complete_database_only_import_preserves_manifest_and_omissions(self):
         result, _ = self.exercise()
-        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['status'], 'complete', result['errors'])
         self.assertIsNotNone(result['evidence_id'])
 
     def test_missing_declared_sidecar_is_partial_not_intentional_omission(self):
         result, _ = self.exercise(missing=True)
-        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['status'], 'partial', result['errors'])
         self.assertIn('sms.db-wal', ' '.join(result['errors']))
 
     def test_no_sidecars_declared_is_valid(self):
@@ -161,7 +162,7 @@ class SelectedIPhoneTests(unittest.TestCase):
 
     def test_received_wal_validates_using_working_copy(self):
         result, _ = self.exercise(wal=True)
-        self.assertEqual(result['status'], 'complete')
+        self.assertEqual(result['status'], 'complete', result['errors'])
         self.assertEqual(result['selection']['selected_manifest_files'], 3)
 
     def test_wrong_version_fails_before_phone_command(self):
@@ -235,11 +236,11 @@ class SelectedIPhoneTests(unittest.TestCase):
 
     def test_reported_file_transfer_failure_is_partial(self):
         result, _ = self.exercise(warning='Failed to fully upload: selected file\n')
-        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['status'], 'partial', result['errors'])
 
     def test_corrupt_database_is_partial(self):
         result, _ = self.exercise(corrupt=True)
-        self.assertEqual(result['status'], 'partial')
+        self.assertEqual(result['status'], 'partial', result['errors'])
         self.assertIn('validation failed', ' '.join(result['errors']))
 
     def test_duplicate_manifest_or_link_refused(self):
@@ -293,6 +294,13 @@ class SelectedIPhoneTests(unittest.TestCase):
                 output.write_text(VERSION)
                 Path(str(output) + '.stderr').write_text('')
                 folder = output.parent
+                if os.name == 'nt':
+                    # The live Windows handle must prevent the directory swap itself.
+                    with self.assertRaises(PermissionError):
+                        folder.rename(folder.with_name(folder.name + '-original'))
+                    self.assertTrue(folder.is_dir())
+                    self.assertFalse(folder.is_symlink())
+                    raise UserError('Synthetic output-directory replacement was refused.')
                 folder.rename(folder.with_name(folder.name + '-original'))
                 folder.symlink_to(outside, target_is_directory=True)
                 return {'argv': argv, 'returncode': 0, 'stdout': str(output), 'stderr': str(output) + '.stderr'}
@@ -302,7 +310,15 @@ class SelectedIPhoneTests(unittest.TestCase):
                 result = collect_selected(root, db, workspace, SERIAL)
                 self.assertEqual(result['status'], 'failed')
                 self.assertIsNone(result['evidence_id'])
-                self.assertIn('receipt could not be finalized', ' '.join(result['errors']))
+                if os.name == 'nt':
+                    self.assertIn('output-directory replacement was refused', ' '.join(result['errors']))
+                    self.assertNotIn('receipt could not be finalized', ' '.join(result['errors']))
+                    self.assertTrue((Path(result['path']) / 'collection.json').is_file())
+                else:
+                    self.assertIn('receipt could not be finalized', ' '.join(result['errors']))
+                terminal = json.loads(db.execute("SELECT detail FROM audit WHERE action='collection.finished' ORDER BY id DESC LIMIT 1").fetchone()[0])
+                self.assertEqual(terminal['status'], 'failed')
+                self.assertIsNone(terminal['evidence_id'])
             self.assertEqual(list(outside.iterdir()), [])
 
 

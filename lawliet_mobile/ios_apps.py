@@ -94,13 +94,14 @@ def _publish_bytes(path, raw):
 
 def collect_apps(root, db, workspace, serial, timeout=120, max_bytes=MAX_BYTES):
     """Collect through configured utilities. Caller obtains examiner authorization."""
-    from .iphone_connection import UDID
+    from .iphone_connection import UDID, require_local_usb_environment
     from .runner_lease import lease
     if not isinstance(serial, str) or not UDID.fullmatch(serial):
         raise UserError('Select an explicit iPhone UDID from device discovery.')
     if (type(timeout) not in (int, float) or not 0 < timeout <= 900
             or type(max_bytes) is not int or not 1024 <= max_bytes <= MAX_BYTES):
         raise UserError('App inventory requires a positive timeout up to 900 seconds and a 1 KiB–16 MiB budget.')
+    require_local_usb_environment()
     with lease(root, db):
         return _collect_owned(root, db, workspace, serial, timeout, max_bytes)
 

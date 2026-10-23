@@ -16,6 +16,26 @@ def tool_executable(name):
 
 UDID=re.compile(r'(?:[0-9A-Fa-f]{40}|[0-9A-Fa-f]{8}-[0-9A-Fa-f]{16})\Z')
 
+USB_TRANSPORT_OVERRIDES = (
+    'USBMUXD_SOCKET_ADDRESS', 'PYMOBILEDEVICE3_USBMUX',
+    'PYMOBILEDEVICE3_TUNNEL', 'PYMOBILEDEVICE3_USERSPACE',
+    'PYMOBILEDEVICE3_NATIVE', 'PYMOBILEDEVICE3_FORCE_TUNNEL',
+    'PYMOBILEDEVICE3_DEFAULT_FALLBACK', 'PYMOBILEDEVICE3_RECONNECT_ANY',
+)
+
+def require_local_usb_environment():
+    """Refuse inherited transport/device-switch overrides, without logging values.
+
+    libusbmuxd accepts a remote socket through USBMUXD_SOCKET_ADDRESS. The pinned
+    pymobiledevice3 CLI additionally prioritizes a tunnel over its explicit UDID.
+    This route supports the default local USB service only. Never mutate the
+    process environment shared with other GUI workers.
+    """
+    present = [name for name in USB_TRANSPORT_OVERRIDES if os.environ.get(name)]
+    if present:
+        raise UserError('USB iPhone collection cannot use transport overrides. Unset these variables '
+                        'in the environment that launches LAWLIET, then restart it: ' + ', '.join(present))
+
 def run(argv,runner=subprocess.run):
     try:result=runner(argv,capture_output=True,text=True,timeout=5)
     except subprocess.TimeoutExpired:raise UserError('iPhone connection check timed out. Unlock the phone and retry.')
@@ -24,6 +44,7 @@ def run(argv,runner=subprocess.run):
     return result
 
 def discover(workspace,runner=subprocess.run):
+    require_local_usb_environment()
     try:argv=command(workspace,'idevice_id')
     except UserError:
         if configuration(workspace).get('idevice_id'):raise

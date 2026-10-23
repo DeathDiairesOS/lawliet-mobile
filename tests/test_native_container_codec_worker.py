@@ -1,6 +1,7 @@
 """Actual private worker/native parser -> host codec, without Docker or production writes."""
 import unittest
 import sqlite3
+import plistlib
 
 from lawliet_mobile import native_container_codec as codec
 from lawliet_mobile import native_container_worker as worker
@@ -8,16 +9,17 @@ from tests import test_native_container_worker as fixtures
 
 
 class CodecWorkerTests(unittest.TestCase):
-    def exercise(self, items):
+    def exercise(self, items, platform='android'):
         fixture = fixtures.WorkerTests()
         fixture.setUp()
         self.addCleanup(fixture.doCleanups)
+        fixture.request['evidence']['platform'] = platform
         for index, (path, content) in enumerate(items,1):
             fixture.add(path, content, file_id=index)
         raw = fixture.execute()
         bindings = dict(protocol=codec.PROTOCOL, request_sha256=worker.sha(fixture.request_path.read_bytes()),
                         source_manifest_sha256=worker.sha(worker.canonical(fixture.request['inputs'])),
-                        evidence_id=fixture.eid, native_parser_version='native/0.1.12',
+                        evidence_id=fixture.eid, native_parser_version='native/0.1.13',
                         package_manifest_sha256=worker.sha(worker.canonical(fixture.request['package_sha256'])),
                         bootstrap_sha256=fixture.request['bootstrap_sha256'])
         result = codec.validate(raw, bindings, fixture.request['inputs'])
@@ -28,6 +30,24 @@ class CodecWorkerTests(unittest.TestCase):
         self.assertEqual([r['title'] for r in rows], ['z.app','a.app'])
         self.assertEqual(result.detail['status'], 'complete')
         self.assertEqual(result.detail['new_records'], 2)
+
+    def test_actual_ios_inventory_original_fields_and_locations(self):
+        app = {'CFBundleIdentifier': 'example.synthetic', 'CFBundleDisplayName': 'Synthetic café',
+               'CFBundleShortVersionString': '2.3', 'ApplicationType': 'User'}
+        device = {'ProductType': 'iPhone17,2', 'ProductVersion': '26.0'}
+        result, rows = self.exercise([('ios-apps.plist', plistlib.dumps([app])),
+                                      ('ios-device.plist', plistlib.dumps(device))], platform='ios')
+        self.assertEqual(result.footer['native_status'], 'complete')
+        self.assertEqual(len(rows), 2)
+        indexed = {row['category']: row for row in rows}
+        for category, original, fid, ref in [('apps', app, 1, 'plist:array[index=0]'),
+                                              ('device', device, 2, 'plist:dict')]:
+            row = indexed[category]
+            self.assertEqual(row['data']['original'], original)
+            self.assertEqual(row['file_id'], fid)
+            self.assertEqual(row['source_ref'], ref)
+            self.assertEqual(row['parser'], 'native/0.1.13')
+            self.assertIsNone(row['timestamp'])
 
     def test_actual_partial_source_error_not_clean_negative(self):
         result, rows = self.exercise([('broken.xml', b'<broken>'),('packages.txt', b'package:good.app\n')])

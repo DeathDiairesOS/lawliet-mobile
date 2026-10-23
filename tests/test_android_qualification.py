@@ -45,7 +45,7 @@ class AndroidQualification(unittest.TestCase):
         self.assertEqual(self.fixture["corpus_sha256"],
                          "6ac86a307f18af7f3a5443599ac3df519a6e046a0d27d5e80df139cfa8b6aefb")
         self.assertEqual(self.fixture["oracle_sha256"],
-                         "90bed257960deebd255b99c3b36c3c1f9bd8e7e1ed2e52c5d8bb1653f04ce3a8")
+                         "c0f9aed8fe78f843b6a33c3471ed4fb6c1c40a64f5c7ad40a139b5f9bb62b9a5")
         self.assertEqual(check_raw_sources(self.fixture["path"])["sms_records"], 4)
         self.assertEqual(check_raw_sources(self.fixture["missing_path"], missing_wal=True)["sms_records"], 3)
         # Independent integer arithmetic, not lawliet_mobile.parsers.timestamp.
@@ -73,7 +73,7 @@ class AndroidQualification(unittest.TestCase):
             rows = select_artifacts(db, limit=None)
             comparison = self.assert_answers(rows, oracle)
             self.assertEqual(comparison["field_fingerprint_sha256"],
-                             "d61722eeb89ecd277a5dc81a23c2b12042713768e047df0db652eed8b9b72e76")
+                             "b8f29502648efccb8d3d3ea287335a873f641ec21b2b286f98443958a05a3d4d")
             self.assertEqual({r["source_ref"] for r in select_artifacts(
                 db, since=oracle["timeline"]["since"], until=oracle["timeline"]["until"], limit=None)},
                 set(oracle["timeline"]["source_refs"]))
@@ -210,6 +210,7 @@ class AndroidQualification(unittest.TestCase):
             ("extra", lambda r: r.append(dict(r[0], source_ref="invented")), "unexpected_records"),
             ("timestamp", lambda r: r[0].update(timestamp="2024-01-01T00:00:00.000000Z"), "field_mismatches"),
             ("hash", lambda r: r[0].update(source_sha256="0" * 64), "field_mismatches"),
+            ("parser version", lambda r: r[0].update(parser="native/0.1.12"), "field_mismatches"),
             ("null is not missing", lambda r: r[-1].pop("timestamp"), "field_mismatches"),
         ):
             with self.subTest(label=label):

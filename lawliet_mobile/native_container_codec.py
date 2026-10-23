@@ -7,6 +7,10 @@ import math
 from .core import json_text
 
 PROTOCOL = 'lawliet-native-artifacts/1'
+# These parser releases share the reviewed envelope and reference schema.
+# Keep this explicit: importing the current parser version here would silently
+# admit future formats before the host validator has been qualified for them.
+SUPPORTED_NATIVE_VERSIONS = frozenset({'native/0.1.12', 'native/0.1.13'})
 MAX_STDOUT = 18 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 MAX_LINE = 8 * 1024 * 1024
@@ -263,8 +267,8 @@ def _validate(raw, trusted_bindings, manifest):
     _require(type(raw) is bytes and len(raw) <= MAX_STDOUT and raw.endswith(b'\n'), 'Invalid transport size or termination')
     _require(type(trusted_bindings) is dict and set(trusted_bindings) == BINDINGS, 'Invalid trusted bindings')
     _require(trusted_bindings['protocol'] == PROTOCOL, 'Unsupported native protocol')
-    _require(trusted_bindings['native_parser_version'] == 'native/0.1.12', 'Unsupported native schema version')
     _require(all(type(v) is str for v in trusted_bindings.values()), 'Invalid trusted binding types')
+    _require(trusted_bindings['native_parser_version'] in SUPPORTED_NATIVE_VERSIONS, 'Unsupported native schema version')
     files = _manifest(manifest, trusted_bindings['evidence_id'])
     offset = count = artifact_bytes = 0
     digest = hashlib.sha256()
