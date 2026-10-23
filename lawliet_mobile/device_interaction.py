@@ -7,7 +7,9 @@ from pathlib import Path
 import re
 import signal
 import subprocess
+import sys
 import threading
+import time
 import uuid
 
 from .core import UserError
@@ -129,6 +131,30 @@ class DeviceSession:
     error: str = ''
 
 
+def _terminate_remaining_group(process):
+    try:
+        os.killpg(process.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except PermissionError:
+        if sys.platform != 'darwin' or process.returncode is None:
+            raise
+        # XNU excludes zombies when signaling a group, so an existing group
+        # with only exiting children can yield EPERM. A denied live group has
+        # the same error: only observed disappearance (ESRCH) permits success.
+        # Probe only on this failure path; do not repeat termination signals.
+        deadline = time.monotonic() + 1
+        while time.monotonic() < deadline:
+            try:
+                os.killpg(process.pid, 0)
+            except ProcessLookupError:
+                return
+            except PermissionError:
+                pass
+            time.sleep(0.01)
+        raise
+
+
 class ScrcpyManager:
     def __init__(self, workspace, adb, audit, popen=subprocess.Popen):
         self.workspace, self.adb, self.audit, self.popen = workspace, adb, audit, popen
@@ -140,7 +166,6 @@ class ScrcpyManager:
         # Executable adapter keeps scrcpy's internal ADB commands local and audited,
         # and blocks its built-in file-drop installation/upload feature.
         source = Path(__file__).with_name('scrcpy_adb.py')
-        import sys
         import shlex
         self.wrapper.write_text('#!/bin/sh\nexec ' + shlex.quote(sys.executable) + ' ' + shlex.quote(str(source)) + ' "$@"\n')
         self.wrapper.chmod(0o700)
@@ -217,10 +242,7 @@ class ScrcpyManager:
 
     def finish(self, reason, code):
         if self.process:
-            try:
-                os.killpg(self.process.pid, signal.SIGTERM)
-            except ProcessLookupError:
-                pass
+            _terminate_remaining_group(self.process)
         if self.reader:
             self.reader.join(timeout=1)
         self.session.status = 'stopped' if reason != 'failed' else 'failed'
@@ -251,11 +273,7 @@ class ScrcpyManager:
             except subprocess.TimeoutExpired:
                 os.killpg(process.pid, signal.SIGKILL)
                 process.wait(timeout=2)
-        # Remove any surviving owned ADB children, never the shared ADB daemon.
-        try:
-            os.killpg(process.pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
+        # finish removes surviving owned ADB children, never the shared daemon.
         self.finish(reason, process.returncode)
         if audit_error:
             raise audit_error

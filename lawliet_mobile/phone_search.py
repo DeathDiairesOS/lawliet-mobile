@@ -32,4 +32,6 @@ def has_phone(raw, target):
         if isinstance(phones, list):
             candidates.extend(value[4:] if value[:4].lower() == 'tel:' else value
                               for value in phones if isinstance(value, str))
+    from .ios_contacts import contact_values
+    candidates.extend(contact_values(data, 'phone'))
     return any(phone_digits(value) == target for value in candidates)

@@ -108,10 +108,31 @@ dated observations. App/device inventories stay undated. Inspect original fields
 source file/hash and record locator; installed-app presence does not imply use.
 
 Native iOS message parsing preserves plaintext and source timestamps, direction,
-service and raw fields. Opaque attributed bodies, reaction/reply/edit semantics
-and deleted content are not fully decoded. Native `ABPerson` parsing exposes
-names and organization; this route does not yet normalize every phone/email
-join. Collected database bytes and indexed artifact coverage are separate claims.
+service and raw fields. Starting with `native/0.1.14`, when plaintext is absent,
+a bounded decoder reads the text field from qualified Foundation typedstream or
+binary NSKeyedArchiver attributed bodies. Plaintext takes precedence. The record
+retains the BLOB hash, decoder version and text location; typedstream byte ranges
+are within the BLOB, not offsets within the SQLite file. The inspector labels
+decoded text and unsupported/malformed bodies. Original database bytes remain
+unchanged. Search, timeline and JSONL export use the decoded text.
+
+This is text-only decoding, not a general Apple archive interpreter. Typedstream
+attribute graphs are not decoded or fully validated. Inputs are limited to 1 MiB
+and decoded text to 256 KiB; binary plist graphs have additional object, reference
+and depth limits. Unsupported layouts remain visible coverage limitations.
+Reaction/reply/edit semantics, attachments and deleted content are not inferred
+from decoded text. Independently Foundation-generated synthetic fixtures and
+adversarial tests are retained under `tests/fixtures/ios_attributed_body`.
+
+Native contact parsing now joins `ABMultiValue.record_id` to `ABPerson.ROWID`
+within the same source database. Observed property codes 3 and 4 supply phone
+numbers and emails, with optional labels from `ABMultiValueLabel`. Every value
+retains its person, value and label row references and original fields. The
+inspector and phone search use these typed values without merging people across
+sources or assigning a contact identity to messages. Unsupported schema/value
+types, orphan rows, unresolved labels and per-contact size limits are reported.
+These are qualified schema conventions, not a claim to support every iOS contact
+store. Collected database bytes and indexed artifact coverage remain separate claims.
 
 ## Receipts, omissions and failure handling
 
@@ -199,3 +220,18 @@ payload bytes still cross the transport, temporary placeholders count toward the
 100,000-file limit, and the original manifest itself can exceed the retention
 budget. The disk guard is not a memory quota for the external tool's incoming
 protocol frames. Unsupported or oversized collections must remain visible failures.
+
+### Live follow-up, 23 October 2026
+
+A trusted iPhone on iOS 26.6.1 passed the selected-profile host/tool preflight.
+The attempted messages/contacts collection ended with Apple backup error
+`MBErrorDomain/208` (device locked). LAWLIET retained diagnostics and imported no
+evidence. A successful physical selected-database acquisition remains unqualified;
+the parser improvements above do not change that result.
+
+The `native/0.1.14` local regression run completed 1,587 tests with 261 explicit
+platform/optional skips and no failures. Six additional compiled Swift phone-pivot
+checks passed. The native app builds and passes bundle-signature verification.
+A wholly synthetic case exercises plaintext precedence, two Foundation archive
+formats, unavailable bodies, contact joins, search, provenance, export, reanalysis
+and unchanged input hashes. Physical phone coverage is a separate qualification.

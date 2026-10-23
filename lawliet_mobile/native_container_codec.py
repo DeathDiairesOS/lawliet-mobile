@@ -10,7 +10,7 @@ PROTOCOL = 'lawliet-native-artifacts/1'
 # These parser releases share the reviewed envelope and reference schema.
 # Keep this explicit: importing the current parser version here would silently
 # admit future formats before the host validator has been qualified for them.
-SUPPORTED_NATIVE_VERSIONS = frozenset({'native/0.1.12', 'native/0.1.13'})
+SUPPORTED_NATIVE_VERSIONS = frozenset({'native/0.1.12', 'native/0.1.13', 'native/0.1.14'})
 MAX_STDOUT = 18 * 1024 * 1024
 MAX_ARTIFACT_BYTES = 16 * 1024 * 1024
 MAX_LINE = 8 * 1024 * 1024

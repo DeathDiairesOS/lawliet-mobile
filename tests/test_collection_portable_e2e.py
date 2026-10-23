@@ -117,25 +117,25 @@ class PortableCollectionExecution(unittest.TestCase):
             ('contacts-provider', 'vcard:record=1'):
                 ('contacts', 'Alex Fixture',
                  'FN: Alex Fixture · UID: android-provider-user-0-contact-7 · TEL: +12025550123',
-                 None, None, 'contacts.vcf', 'vcard:record=1', 'native/0.1.13'),
+                 None, None, 'contacts.vcf', 'vcard:record=1', 'native/0.1.14'),
             ('triage', 'line=2'):
                 ('logs', 'I · ActivityManager', 'Synthetic activity resumed',
                  '2026-10-17T12:00:01.250000Z', '1792238401.250',
-                 'logcat.txt', 'line=2', 'native/0.1.13'),
+                 'logcat.txt', 'line=2', 'native/0.1.14'),
             ('files', 'file:shared/0/lab-photo.png'):
                 ('media', 'lab-photo.png', 'image/png', None, None,
-                 'shared/0/lab-photo.png', 'file:shared/0/lab-photo.png', 'native/0.1.13'),
+                 'shared/0/lab-photo.png', 'file:shared/0/lab-photo.png', 'native/0.1.14'),
             ('trash-photos', 'file:photos/0/trashed-fixture.png'):
                 ('media', 'trashed-fixture.png', 'image/png', None, None,
-                 'photos/0/trashed-fixture.png', 'file:photos/0/trashed-fixture.png', 'native/0.1.13'),
+                 'photos/0/trashed-fixture.png', 'file:photos/0/trashed-fixture.png', 'native/0.1.14'),
         }
         for profile in ('files', 'triage'):
             expected[(profile, 'line=1')] = (
                 'apps', 'com.example.fixture', '/data/app/example/base.apk', None, None,
-                'packages.txt', 'line=1', 'native/0.1.13')
+                'packages.txt', 'line=1', 'native/0.1.14')
             expected[(profile, 'getprop output')] = (
                 'device', 'Android system properties', ' Synthetic validation fixture · Android 13',
-                None, None, 'getprop.txt', 'getprop output', 'native/0.1.13')
+                None, None, 'getprop.txt', 'getprop output', 'native/0.1.14')
         with connect(self.workspace, 'SYNTHETIC') as (root, db):
             files = self.retained(root, db)
             rows = select_artifacts(db, limit=None)

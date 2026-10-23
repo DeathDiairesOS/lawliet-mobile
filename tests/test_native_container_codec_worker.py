@@ -2,6 +2,9 @@
 import unittest
 import sqlite3
 import plistlib
+import hashlib
+import json
+from pathlib import Path
 
 from lawliet_mobile import native_container_codec as codec
 from lawliet_mobile import native_container_worker as worker
@@ -19,7 +22,7 @@ class CodecWorkerTests(unittest.TestCase):
         raw = fixture.execute()
         bindings = dict(protocol=codec.PROTOCOL, request_sha256=worker.sha(fixture.request_path.read_bytes()),
                         source_manifest_sha256=worker.sha(worker.canonical(fixture.request['inputs'])),
-                        evidence_id=fixture.eid, native_parser_version='native/0.1.13',
+                        evidence_id=fixture.eid, native_parser_version='native/0.1.14',
                         package_manifest_sha256=worker.sha(worker.canonical(fixture.request['package_sha256'])),
                         bootstrap_sha256=fixture.request['bootstrap_sha256'])
         result = codec.validate(raw, bindings, fixture.request['inputs'])
@@ -46,8 +49,95 @@ class CodecWorkerTests(unittest.TestCase):
             self.assertEqual(row['data']['original'], original)
             self.assertEqual(row['file_id'], fid)
             self.assertEqual(row['source_ref'], ref)
-            self.assertEqual(row['parser'], 'native/0.1.13')
+            self.assertEqual(row['parser'], 'native/0.1.14')
             self.assertIsNone(row['timestamp'])
+
+    def test_actual_ios_contact_values_keep_independent_record_references(self):
+        db = sqlite3.connect(':memory:')
+        try:
+            db.executescript("""
+                CREATE TABLE ABPerson(First, Last, Organization, ModificationDate);
+                CREATE TABLE ABMultiValue(record_id, property, value, label, UID);
+                CREATE TABLE ABMultiValueLabel(value);
+                INSERT INTO ABPerson(ROWID, First, Last, Organization, ModificationDate)
+                    VALUES(11, 'Morgan', 'Synthetic', 'LAWLIET lab', NULL);
+                INSERT INTO ABMultiValueLabel(ROWID, value) VALUES(7, '_$!<Mobile>!$_');
+                INSERT INTO ABMultiValue(ROWID, record_id, property, value, label, UID)
+                    VALUES(21, 11, 3, '+1 (202) 555-0101', 7, 901);
+                INSERT INTO ABMultiValue(ROWID, record_id, property, value, label, UID)
+                    VALUES(22, 11, 4, 'test@example.test', NULL, 902);
+            """)
+            raw = db.serialize()
+        finally:
+            db.close()
+        result, rows = self.exercise([('Library/AddressBook/AddressBook.sqlitedb', raw)], platform='ios')
+        self.assertEqual(result.footer['native_status'], 'complete')
+        self.assertEqual(len(rows), 1)
+        row = rows[0]
+        self.assertEqual((row['category'], row['title'], row['source_ref'], row['file_id'], row['parser']),
+                         ('contacts', 'Morgan Synthetic', 'ABPerson:ROWID=11', 1, 'native/0.1.14'))
+        self.assertIsNone(row['timestamp'])
+        self.assertEqual((row['data']['First'], row['data']['Last'], row['data']['Organization']),
+                         ('Morgan', 'Synthetic', 'LAWLIET lab'))
+        contact = row['data']['ios_contact']
+        self.assertEqual((contact['schema'], contact['person_ref'], contact['values_state']),
+                         ('ios-addressbook-contact/1', 'ABPerson:ROWID=11', 'examined'))
+        values = contact['values']
+        self.assertEqual(len(values), 2)
+        self.assertEqual([(v['kind'], v['value'], v['source_ref'], v['person_ref'], v['original']['UID'])
+                          for v in values],
+                         [('phone', '+1 (202) 555-0101', 'ABMultiValue:ROWID=21', 'ABPerson:ROWID=11', 901),
+                          ('email', 'test@example.test', 'ABMultiValue:ROWID=22', 'ABPerson:ROWID=11', 902)])
+        self.assertEqual(values[0]['label'], {'identifier': 7, 'value': '_$!<Mobile>!$_',
+                         'source_ref': 'ABMultiValueLabel:ROWID=7', 'state': 'linked'})
+        self.assertEqual(values[1]['label'], {'identifier': None, 'value': None,
+                         'source_ref': None, 'state': 'not_supplied'})
+
+    def test_actual_ios_attributed_text_and_unsupported_body_keep_provenance(self):
+        manifest = json.loads((Path(__file__).parent / 'fixtures' / 'ios_attributed_body' /
+                               'fixtures.json').read_text(encoding='utf-8'))
+        fixture = next(item for item in manifest['fixtures']
+                       if item['id'] == 'immutable-unicode-typedstream')
+        attributed = bytes.fromhex(fixture['hex'])
+        unsupported = b'Unsupported archive; this text must not become a decoded message.'
+        db = sqlite3.connect(':memory:')
+        try:
+            db.executescript("""
+                CREATE TABLE message(text, attributedBody BLOB, date INTEGER,
+                                     handle_id INTEGER, is_from_me INTEGER, service TEXT);
+                CREATE TABLE handle(id TEXT);
+                INSERT INTO handle(ROWID, id) VALUES(7, 'test@example.test');
+            """)
+            db.executemany('INSERT INTO message(ROWID, text, attributedBody, date, handle_id, is_from_me, service) '
+                           "VALUES(?, NULL, ?, 725760000000000000, 7, 0, 'iMessage')",
+                           [(41, attributed), (42, unsupported)])
+            raw = db.serialize()
+        finally:
+            db.close()
+        result, rows = self.exercise([('Library/SMS/sms.db', raw)], platform='ios')
+        self.assertEqual(result.footer['native_status'], 'complete')
+        self.assertEqual(len(rows), 2)
+        by_ref = {row['source_ref']: row for row in rows}
+        decoded = by_ref['message:rowid=41']
+        missing = by_ref['message:rowid=42']
+        self.assertEqual(decoded['body'], fixture['expected_text'])
+        self.assertEqual(missing['body'], '')
+        self.assertEqual(decoded['data']['message']['body_status'], 'attributed_body_text')
+        self.assertEqual(missing['data']['message']['body_status'], 'opaque_body_not_decoded')
+        for row, blob, state in [(decoded, attributed, 'decoded'), (missing, unsupported, 'unsupported')]:
+            self.assertEqual((row['category'], row['file_id'], row['parser']), ('messages', 1, 'native/0.1.14'))
+            self.assertEqual((row['timestamp'], row['timestamp_raw']),
+                             ('2024-01-01T00:00:00.000000Z', '725760000000000000'))
+            self.assertIsNone(row['data']['text'])
+            self.assertEqual(row['data']['attributedBody'], {'blob_bytes': len(blob)})
+            body = row['data']['ios_message_body']
+            self.assertEqual((body['state'], body['source_field'], body['blob_bytes'], body['blob_sha256']),
+                             (state, 'attributedBody', len(blob), hashlib.sha256(blob).hexdigest()))
+            self.assertTrue(body['limitation'])
+        start, end = decoded['data']['ios_message_body']['source_byte_range']
+        self.assertEqual(attributed[start:end].decode('utf-8'), fixture['expected_text'])
+        self.assertTrue(any(item.get('body_decode_state') == 'unsupported' and item.get('rows_observed') == 1
+                            for item in result.detail['unparsed_candidates']))
 
     def test_actual_partial_source_error_not_clean_negative(self):
         result, rows = self.exercise([('broken.xml', b'<broken>'),('packages.txt', b'package:good.app\n')])

@@ -15,7 +15,7 @@ from pathlib import Path
 from .core import begin_run_index, UserError, add_artifact, audit, json_text, now, verify
 from .messages import metadata, scope_message, telephony_records, ios_event_markers
 
-VERSION = "native/0.1.13"
+VERSION = "native/0.1.14"
 MAX_SQLITE_VALUE_BYTES = 8 * 1024**2
 
 
@@ -95,14 +95,15 @@ def get(row, *names, default=""):
     return default
 
 
-def records(db, table):
+def records(db, table, *, retain_blobs=()):
     try:
         cursor = db.execute(f'SELECT rowid AS __rowid__, * FROM "{table}"')
     except sqlite3.DatabaseError:
         cursor = db.execute(f'SELECT * FROM "{table}"')
     for row in cursor:
         # Preserve blob lengths rather than dumping private/bulky binary values.
-        yield {k: ({"blob_bytes": len(v)} if isinstance(v, bytes) else v) for k, v in dict(row).items()}
+        yield {k: ({"blob_bytes": len(v)} if isinstance(v, bytes) and k not in retain_blobs else v)
+               for k, v in dict(row).items()}
 
 
 def android_residual_coverage(input_db, logical_path):
@@ -189,13 +190,29 @@ def parse_database(input_db, logical_path):
             yield 'messages', timestamp(raw, unit='milliseconds'), raw, 'Signal · ' + direction, get(row, 'body'), f"message:_id={get(row, '_id', '__rowid__')}", row
         return
     if "message" in names and "handle" in names and "sms" in path:
+        if 'ios_message_body' in columns(input_db, 'message'):
+            raise ValueError('Source message column collides with decoded-body provenance; iOS message decoding refused.')
         handle_cols = columns(input_db, "handle")
         handles = {r[0]: r[1] for r in input_db.execute('SELECT ROWID,id FROM handle')} if "id" in handle_cols else {}
         chat_links = {}
         if 'chat_message_join' in names and {'chat_id', 'message_id'} <= columns(input_db, 'chat_message_join'):
             for chat_id, message_id in input_db.execute('SELECT chat_id,message_id FROM chat_message_join'):
                 chat_links.setdefault(message_id, set()).add(str(chat_id))
-        for row in records(input_db, "message"):
+        for row in records(input_db, "message", retain_blobs=('attributedBody',)):
+            from .ios_messages import decode_attributed_body
+            attributed = row.get('attributedBody')
+            if isinstance(attributed, bytes):
+                # Decode only this bounded field; the original BLOB stays in
+                # preserved SQLite, not duplicated into every indexed record.
+                row['attributedBody'] = {'blob_bytes': len(attributed)}
+            body = get(row, 'text')
+            decoded_body = None
+            if body == '' and attributed is not None:
+                decoded_body = decode_attributed_body(attributed)
+                row['ios_message_body'] = {key: value for key, value in decoded_body.items() if key != 'text'}
+                row['ios_message_body']['source_field'] = 'attributedBody'
+                if decoded_body['state'] == 'decoded':
+                    body = decoded_body['text']
             raw = get(row, "date", default=None)
             # Modern iOS SMS uses Apple-epoch nanoseconds; older schemas use seconds.
             unit = "nanoseconds" if raw is not None and abs(float(raw)) > 100_000_000_000 else "seconds"
@@ -219,15 +236,19 @@ def parse_database(input_db, logical_path):
             chats = sorted(chat_links.get(get(row, '__rowid__', 'ROWID'), set()))
             conversation = 'chat:' + ','.join(chats) if chats else 'unlinked-handle:' + str(get(row, 'handle_id', default='unknown'))
             rich_event = ios_event_markers(row)
+            if decoded_body and decoded_body['state'] == 'decoded':
+                rich_event['opaque_body_fields'].pop('attributedBody', None)
+                if not rich_event['markers'] and not rich_event['opaque_body_fields']:
+                    rich_event['state'] = 'body_text_decoded_event_semantics_not_assessed'
             row['message'] = metadata(str(get(row, 'service', default='SMS')).lower(), conversation,
                 contact if direction == 'incoming' else '', contact if direction == 'outgoing' else '', direction,
                 chat_ids=chats, conversation_kind='stored_chat_links' if chats else 'handle_fallback_not_a_confirmed_chat',
-                body_status='plaintext' if get(row, 'text') else 'opaque_body_not_decoded' if rich_event['opaque_body_fields'] else 'no_plaintext_body',
+                body_status='plaintext' if get(row, 'text') else 'attributed_body_text' if decoded_body and decoded_body['state'] == 'decoded' else 'opaque_body_not_decoded' if rich_event['opaque_body_fields'] else 'no_plaintext_body',
                 attachment_status='not_assessed', rich_event=rich_event)
             title = f"{get(row, 'service', default='SMS')} · {direction} · {contact}"
             if rich_event['state'] == 'not_decoded':
                 title = 'Undecoded message event · ' + title
-            yield "messages", normalized_time, raw, title, get(row, "text"), f"message:rowid={get(row, '__rowid__', default='unknown')}", row
+            yield "messages", normalized_time, raw, title, body, f"message:rowid={get(row, '__rowid__', default='unknown')}", row
     if "sms" in names and "body" in columns(input_db, "sms"):
         for row in records(input_db, "sms"):
             raw = get(row, "date", default=None)
@@ -268,7 +289,8 @@ def parse_database(input_db, logical_path):
                                   'limitation': 'Recorded navigation may be synced, automated or redirected; it does not alone prove deliberate human browsing.'}
                 yield "browser", chromium_timestamp(raw), raw, (url_row.get('title') if url_row else None) or 'Chromium visit', (url_row.get('url') if url_row else None), f"visits:id={row.get('id')} -> urls:id={row.get('url')}", row
     if "ABPerson" in names:
-        for row in records(input_db, "ABPerson"):
+        from .ios_contacts import person_records
+        for row in person_records(input_db):
             raw = get(row, "ModificationDate", default=None)
             name = " ".join(str(get(row, k)) for k in ("First", "Last")).strip()
             yield "contacts", timestamp(raw, "apple"), raw, name or "Unnamed contact", get(row, "Organization"), f"ABPerson:ROWID={get(row, '__rowid__')}", row
@@ -439,6 +461,8 @@ def _native_analyze_owned(root, db, evidence_id):
                         from .android_mms import decode as decode_android_mms
                         mms_rows, mms_limits, mms_supported = decode_android_mms(input_db, source['logical_path'], file_rows, evidence['platform'])
                         unparsed_candidates.extend(browser_download_residual_coverage(input_db, source['logical_path']))
+                        from .ios_contacts import contact_coverage
+                        unparsed_candidates.extend(contact_coverage(input_db, source['logical_path']))
                         residual = list(android_residual_coverage(input_db, source['logical_path']))
                         unparsed_candidates.extend(item for item in residual if not mms_supported or item.get('table') not in {'pdu','part','addr'})
                         if not mms_supported and residual and mms_limits:
@@ -462,7 +486,15 @@ def _native_analyze_owned(root, db, evidence_id):
                                     f"attachment:rowid={attachment['attachment_row_id']}", VERSION,
                                     attachment_data, run_id=run_id)
                         from itertools import chain
+                        body_limits = {}
                         for category, when, raw, title, body, reference, data in chain(mms_rows, parse_database(input_db, source["logical_path"])):
+                            body_metadata = data.get('ios_message_body')
+                            body_state = (body_metadata.get('state') if category == 'messages'
+                                and reference.startswith('message:rowid=')
+                                and isinstance(body_metadata, dict)
+                                and body_metadata.get('source_field') == 'attributedBody' else None)
+                            if body_state in ('unsupported', 'malformed', 'limit_exceeded'):
+                                body_limits[body_state] = body_limits.get(body_state, 0) + 1
                             file_categories.add(category)
                             scope_message(data, evidence_id, source["logical_path"])
                             data.setdefault("timestamp_semantics", "UTC normalization of source field; original value preserved")
@@ -472,6 +504,11 @@ def _native_analyze_owned(root, db, evidence_id):
                                 data["sqlite_wal_coverage"] = wal_limit
                             file_count += 1
                             count += add_artifact(db, evidence_id, source["id"], category, when, raw, title, body, reference, VERSION, data, run_id=run_id)
+                        for body_state, affected in sorted(body_limits.items()):
+                            unparsed_candidates.append({'source': source['logical_path'], 'category': 'messages',
+                                'state': 'limited', 'body_decode_state': body_state, 'rows_observed': affected,
+                                'reason': 'Some attributedBody text could not be decoded by the supported bounded reader. '
+                                          'Original bytes remain in the source database; missing text is not absence of a message.'})
                         if not file_count:
                             from .empty_schema import no_record_diagnostic
                             unparsed_candidates.append(no_record_diagnostic(input_db, source['logical_path'], evidence['platform']))

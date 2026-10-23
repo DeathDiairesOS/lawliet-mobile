@@ -65,7 +65,10 @@ def contact_fields(row):
         names=properties.get('FN',[]) or properties.get('N',[])
         return list(names),list(properties.get('TEL',[])),list(properties.get('EMAIL',[]))
     if row['source_ref'].startswith('ABPerson:'):
-        return [' '.join(filter(None,[text(data.get('First')),text(data.get('Last'))]))],[],[]
+        from .ios_contacts import contact_values
+        name = supplied(data, 'DisplayName') or ' '.join(filter(None,
+            [text(data.get(key)) for key in ('First', 'Middle', 'Last')]))
+        return [name] if name else [],contact_values(data, 'phone'),contact_values(data, 'email')
     if data.get('_leapp_report_name') in {'Contacts','Address Book'}:
         name=supplied(fields,'Display Name') or ' '.join(filter(None,[supplied(fields,'First Name'),supplied(fields,'Last Name')]))
         phone=supplied(fields,'Phone Number','Phone Numbers')
@@ -246,8 +249,26 @@ def display_record(row):
             message_fields.append(('Attachment status',text(attachment['status']).replace('_',' ')))
             if attachment.get('source_file'):message_fields.append(('Attachment source file',text(attachment['source_file'])))
         if m.get('channel_id'):message_fields.append(('Channel ID',text(m['channel_id'])))
-        result=project(row,'message',peer or row['title'],message_fields)
-        result['display_body']=row['body'];return result
+        body_decode=data.get('ios_message_body')
+        note=''
+        body_placeholder=''
+        if (row['parser'].startswith('native/') and row['source_ref'].startswith('message:rowid=')
+                and isinstance(body_decode,dict) and body_decode.get('source_field') == 'attributedBody'):
+            state=body_decode.get('state')
+            labels={'decoded':'Decoded text only', 'unsupported':'Unsupported encoding; text unavailable',
+                    'malformed':'Malformed encoded body; text unavailable',
+                    'limit_exceeded':'Decoder limit reached; text unavailable', 'absent':'No encoded body supplied'}
+            message_fields.extend([('Text source','message.attributedBody'),
+                                   ('Text decoding',labels.get(state,'Unrecognized decoder status'))])
+            note=text(body_decode.get('limitation'))
+            unavailable={'unsupported':'unsupported encoding', 'malformed':'malformed encoded body',
+                         'limit_exceeded':'decoder limit reached'}
+            if state in unavailable:
+                body_placeholder='[Text unavailable: '+unavailable[state]+']'
+            if m.get('rich_event',{}).get('state')=='not_decoded':
+                message_fields.append(('Event semantics','Not decoded'))
+        result=project(row,'message',peer or row['title'],message_fields,note)
+        result['display_body']=row['body'] or body_placeholder;return result
     if row['category']=='calls':
         partner=supplied(fields,'number','Phone Number','Partner');kind=supplied(fields,'Call Type','call_type','Type','type')
         # ALEAPP decorates call labels with Feather icons; keep markup in provenance.

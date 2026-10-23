@@ -547,10 +547,10 @@ be parsed.
 
 | Artifact | Source/schema | Output and timestamp meaning |
 |---|---|---|
-| iOS SMS/iMessage | `sms.db`, `message` + `handle` | Plaintext messages, direction, handle; message date in Apple seconds or nanoseconds |
+| iOS SMS/iMessage | `sms.db`, `message` + `handle` | Plaintext or supported attributed-body text, direction, handle; message date in Apple seconds or nanoseconds |
 | iOS calls | `ZCALLRECORD` | Address, duration, call date in Apple seconds |
 | Safari browsing | `history_visits` + `history_items` | Visit URL/title and Apple-epoch visit time |
-| iOS contacts | `ABPerson` | Name/organization; modification timestamp, not contact creation |
+| iOS contacts | `ABPerson` + optional `ABMultiValue` / `ABMultiValueLabel` | Name/organization, supported phone/email values with source row references; contact modification timestamp, not value creation |
 | iOS installed apps | `ios-apps.plist`, installation-service array | Bundle ID, supplied display name/version/type; undated inventory, not usage history |
 | iOS device metadata | `ios-device.plist` | Supplied device/model/iOS/build fields; undated |
 | Android SMS | `sms` with `body` | Message, address, type; Unix milliseconds |
@@ -577,8 +577,11 @@ or phone-completeness guarantees. Synthetic checks do not qualify device exports
 
 Finder/iTunes `Manifest.db` maps hashed payload names back to logical paths.
 Matching SQLite WAL/SHM sidecars are copied into the analysis working directory;
-their hashes are included in artifact provenance. Native parsing does not recover
-deleted data, decode iMessage attributed-body blobs, assemble MMS/attachments,
+their hashes are included in artifact provenance. The bounded iMessage reader
+decodes only qualified text fields and reports unsupported bodies; it does not
+decode formatting, reactions, replies or edit semantics. See the
+[iPhone scope and qualification guide](docs/iphone-bounded-acquisition.md).
+Native parsing does not recover deleted data, assemble MMS/attachments,
 decrypt backups, or render a malware verdict. Encrypted iOS backups are detected
 and explicitly rejected by the analysis adapters until a decrypted extraction is
 provided.

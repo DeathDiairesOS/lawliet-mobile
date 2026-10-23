@@ -1,6 +1,7 @@
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import tempfile
@@ -9,7 +10,7 @@ import unittest
 from unittest.mock import Mock, patch
 
 from lawliet_mobile.core import UserError
-from lawliet_mobile.device_interaction import ADBManager, DeviceDiscovery, ForensicAuditLogger, InteractionService, ScrcpyManager, serial_id
+from lawliet_mobile.device_interaction import ADBManager, DeviceDiscovery, ForensicAuditLogger, InteractionService, ScrcpyManager, _terminate_remaining_group, serial_id
 from lawliet_mobile.scrcpy_adb import permitted
 
 
@@ -118,6 +119,48 @@ class DeviceInteractionTests(unittest.TestCase):
         self.assertEqual(session['status'], 'failed')
         self.assertIn('connection failed', session['error'])
         self.assertFalse(session['control'])
+
+    def test_macos_exited_group_permission_race_requires_observed_disappearance(self):
+        process = Mock(pid=12345, returncode=0)
+        denied = PermissionError(1, 'Operation not permitted')
+        with patch('lawliet_mobile.device_interaction.sys.platform', 'darwin'), \
+             patch('lawliet_mobile.device_interaction.os.killpg',
+                   side_effect=[denied, denied, ProcessLookupError()]) as killpg, \
+             patch('lawliet_mobile.device_interaction.time.sleep'):
+            _terminate_remaining_group(process)
+        self.assertEqual([call.args for call in killpg.call_args_list],
+                         [(12345, signal.SIGTERM), (12345, 0), (12345, 0)])
+
+    def test_macos_persistent_permission_or_live_group_never_reports_stopped(self):
+        for observed in (PermissionError(1, 'Operation not permitted'), None):
+            with self.subTest(observed=observed):
+                manager = self.manager()
+                manager.process = Mock(pid=12345, returncode=0)
+                manager.process.poll.return_value = 0
+                owned = manager.process
+                denied = PermissionError(1, 'Operation not permitted')
+                with patch('lawliet_mobile.device_interaction.sys.platform', 'darwin'), \
+                     patch('lawliet_mobile.device_interaction.os.killpg', side_effect=[denied, observed]) as killpg, \
+                     patch('lawliet_mobile.device_interaction.time.monotonic', side_effect=[0, 0, 2]), \
+                     patch('lawliet_mobile.device_interaction.time.sleep'):
+                    with self.assertRaises(PermissionError) as raised:
+                        manager.stop()
+                self.assertIs(raised.exception, denied)
+                self.assertIs(manager.process, owned)
+                self.assertFalse(any(event['event'] == 'mirror.stopped' for event in self.events()))
+                self.assertEqual([call.args for call in killpg.call_args_list],
+                                 [(12345, signal.SIGTERM), (12345, 0)])
+
+    def test_group_permission_errors_before_exit_or_on_other_hosts_are_not_retried(self):
+        for host, code in (('darwin', None), ('linux', 0)):
+            with self.subTest(host=host, code=code):
+                denied = PermissionError(1, 'Operation not permitted')
+                with patch('lawliet_mobile.device_interaction.sys.platform', host), \
+                     patch('lawliet_mobile.device_interaction.os.killpg', side_effect=denied) as killpg:
+                    with self.assertRaises(PermissionError) as raised:
+                        _terminate_remaining_group(Mock(pid=12345, returncode=code))
+                self.assertIs(raised.exception, denied)
+                killpg.assert_called_once_with(12345, signal.SIGTERM)
 
     def test_failed_launch_is_audited(self):
         manager = self.manager();manager.popen = Mock(side_effect=OSError('no executable'))
